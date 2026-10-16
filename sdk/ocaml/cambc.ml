@@ -89,6 +89,9 @@ module Sys = struct
   external map_camp_group_camps : int -> int -> int -> int -> int = "cambc_map_camp_group_camps"
   external map_camp_group : int -> int -> int = "cambc_map_camp_group"
   external map_camp_info : int -> int -> int = "cambc_map_camp_info"
+  external map_camp_layout : int -> int -> int -> int = "cambc_map_camp_layout"
+  external map_camp_group_of : int -> int -> int = "cambc_map_camp_group_of"
+  external map_camp_at : int -> int -> int -> int = "cambc_map_camp_at"
   external camp_group_cooldown : int -> int -> int = "cambc_camp_group_cooldown"
   external camp_group_state : int -> int -> int = "cambc_camp_group_state"
   external camp_buffs : int -> int -> int -> int -> int = "cambc_camp_buffs"
@@ -1919,10 +1922,7 @@ let load_spawn_region team =
   Bitboard.import_linear_buffer region b;
   region
 
-let load_camp_groups () =
-  let n = query_u32 Sys.map_num_camp_groups in
-  List.map
-    (fun g ->
+let load_camp_group g =
       check (Sys.map_camp_group g rec_);
       let gems = u32 rec_ and gold = u32 (rec_ + 4) in
       let respawn = query_i32 (Sys.bc_camp_group_max_respawn g) in
@@ -1938,9 +1938,37 @@ let load_camp_groups () =
             { camp_handle = m; group = g; camp_kind = Camp_type.of_int (i32 (rec_ + 8)); spawn })
           ids
       in
-      { g_handle = g; gold; gems; respawn; members; g_mask = mask })
-    (List.map u32 (counted_list n 4 Sys.map_camp_groups))
-  |> fun groups -> groups
+      { g_handle = g; gold; gems; respawn; members; g_mask = mask }
+
+let load_camp_groups () =
+  let n = query_u32 (Sys.map_camp_layout 0 0) in
+  let base = list_area () in
+  ensure (base + (n * 4) + 16);
+  let written = query_u32 (Sys.map_camp_layout base n) in
+  if written > n then fail Error_code.Invalid_argument "host returned oversized list";
+  let w i = u32 (base + (4 * i)) in
+  let rec camps g i k acc =
+    if k = 0 then acc
+    else
+      let o = i + (4 * (k - 1)) in
+      camps g i (k - 1) ({ camp_handle = w o; group = g; camp_kind = Camp_type.of_int (w (o + 1)); spawn = Vec2.make (w (o + 2)) (w (o + 3)) } :: acc)
+  in
+  let rec groups i acc =
+    if i + 5 > written then List.rev acc
+    else
+      let g = w i and k = w (i + 4) in
+      if i + 5 + (4 * k) > written then fail Error_code.Invalid_argument "malformed camp layout";
+      let members = camps g (i + 5) k [] in
+      let mask = Bitboard.create () in
+      List.iter (fun c -> Bitboard.set mask c.spawn true) members;
+      groups (i + 5 + (4 * k)) ({ g_handle = g; gold = w (i + 1); gems = w (i + 2); respawn = w (i + 3); members; g_mask = mask } :: acc)
+  in
+  groups 0 []
+
+let load_camp h =
+  check (Sys.map_camp_info h rec_);
+  let spawn = Vec2.make (i32 rec_) (i32 (rec_ + 4)) and camp_kind = Camp_type.of_int (i32 (rec_ + 8)) in
+  { camp_handle = h; group = query_u32 (Sys.map_camp_group_of h); camp_kind; spawn }
 
 let draft_memory =
   lazy
@@ -2175,8 +2203,6 @@ module Champion = struct
   let end_turn c = ignore (h c); flush_all (); ignore (Sys.yield 0)
 end
 
-let find_camp p = List.find_opt p (List.concat_map (fun g -> g.members) (all_camp_groups ()))
-
 module Camp_group = struct
   type t = camp_group
   type state = Alive | Reward_available | Respawning of int
@@ -2227,9 +2253,8 @@ module Camp = struct
   let spawn_position c = c.spawn
 
   let camp_group c =
-    match List.find_opt (fun g -> g.g_handle = c.group) (all_camp_groups ()) with
-    | Some g -> g
-    | None -> fail Error_code.Api_invalid_camp_group "invalid camp group"
+    ignore (cache ());
+    load_camp_group c.group
 
   let base_stats c =
     let o = Unit_ops.camp_design_raw c + 88 in
@@ -2271,9 +2296,8 @@ module Game_map = struct
   let camp_groups () = all_camp_groups ()
 
   let camp_at p =
-    match find_camp (fun c -> Vec2.equal c.spawn p) with
-    | Some c -> c
-    | None -> fail Error_code.Api_not_found "no camp spawns at position"
+    ignore (cache ());
+    load_camp (query_u32 (Sys.map_camp_at p.Vec2.x p.Vec2.y))
 
   let camp_at_opt p = optional camp_at p
 end
@@ -2331,10 +2355,8 @@ module Vision = struct
   let champion_at_opt p = optional champion_at p
 
   let camp_at (p : Vec2.t) =
-    let h = query_u32 (Sys.camp_at p.x p.y) in
-    match find_camp (fun c -> c.camp_handle = h) with
-    | Some c -> c
-    | None -> fail Error_code.Invalid_handle "invalid camp handle"
+    ignore (cache ());
+    load_camp (query_u32 (Sys.camp_at p.x p.y))
 
   let camp_at_opt p = optional camp_at p
   let champions ?team () = List.map champion_at (Bitboard.positions (champion_tiles ?team ()))

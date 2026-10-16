@@ -377,6 +377,9 @@ extern "C"
 	BC_IMPORT("map_camp_group_camps") std::int32_t sdk_map_camp_group_camps(std::uint32_t, std::uint32_t*, std::uint32_t, std::uint32_t*);
 	BC_IMPORT("map_camp_group") std::int32_t sdk_map_camp_group(std::uint32_t, camp_group_info*);
 	BC_IMPORT("map_camp_info") std::int32_t sdk_map_camp_info(std::uint32_t, camp_info*);
+	BC_IMPORT("map_camp_layout") std::int32_t sdk_map_camp_layout(std::uint32_t*, std::uint32_t, std::uint32_t*);
+	BC_IMPORT("map_camp_group_of") std::int32_t sdk_map_camp_group_of(std::uint32_t, std::uint32_t*);
+	BC_IMPORT("map_camp_at") std::int32_t sdk_map_camp_at(std::int32_t, std::int32_t, std::uint32_t*);
 	BC_IMPORT("camp_group_cooldown") std::int32_t sdk_camp_group_cooldown(std::uint32_t, std::int32_t*);
 	BC_IMPORT("camp_group_state") std::int32_t sdk_camp_group_state(std::uint32_t, std::uint32_t*);
 	BC_IMPORT("camp_buffs") std::int32_t sdk_camp_buffs(std::uint32_t, camp_buff_data*, std::uint32_t, std::uint32_t*);

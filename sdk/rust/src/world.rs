@@ -479,13 +479,43 @@ pub(crate) fn camp_group(handle: CampGroupHandle) -> Result<CampGroup> {
 }
 /// Load authoritative host group membership, including merged symmetry-seam groups.
 fn load_camp_groups() -> Result<Vec<CampGroup>> {
-    let count = query(|p| unsafe { sys::map_num_camp_groups(p) })?;
-    crate::counted_list(count, |p, n, out| unsafe {
-        sys::map_camp_groups(p, n, out)
-    })?
-    .into_iter()
-    .map(load_camp_group)
-    .collect()
+    let mut words = vec![0u32; 256];
+    let mut count = 0u32;
+    crate::check(unsafe { sys::map_camp_layout(words.as_mut_ptr(), words.len() as u32, &mut count) })?;
+    if count as usize > words.len() {
+        words.resize(count as usize, 0);
+        crate::check(unsafe { sys::map_camp_layout(words.as_mut_ptr(), count, &mut count) })?;
+    }
+    words.truncate(count as usize);
+    let malformed = || Error::local(ErrorCode::InvalidArgument, "malformed camp layout");
+    let mut groups = Vec::new();
+    let mut rest = &words[..];
+    while let [h, gold, gems, respawn, n, tail @ ..] = rest {
+        let members = tail.get(..*n as usize * 4).ok_or_else(malformed)?;
+        let camps = members
+            .chunks_exact(4)
+            .map(|c| {
+                Ok(Camp::new(
+                    CampHandle(c[0]),
+                    CampGroupHandle(*h),
+                    CampType::try_from(c[1] as i32)?,
+                    Vec2::new(c[2] as i32, c[3] as i32),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        groups.push(CampGroup {
+            handle: CampGroupHandle(*h),
+            gold: *gold,
+            gems: *gems,
+            respawn: *respawn as i32,
+            camps,
+        });
+        rest = &tail[members.len()..];
+    }
+    if !rest.is_empty() {
+        return Err(malformed());
+    }
+    Ok(groups)
 }
 fn load_camp_group(h: u32) -> Result<CampGroup> {
     let rewards = query(|p| unsafe { sys::map_camp_group(h, p) })?;
@@ -517,14 +547,18 @@ fn load_camp_group(h: u32) -> Result<CampGroup> {
 /// # Arguments
 /// * `position` - Spawn tile of the camp.
 pub fn camp(position: Vec2) -> Result<Camp> {
-    for g in camp_groups()? {
-        for c in g.camps() {
-            if c.spawn_position() == position {
-                return Ok(c.clone());
-            }
-        }
-    }
-    Err(Error::local(ErrorCode::ApiNotFound, "no camp spawn here"))
+    state()?;
+    load_camp(query(|p| unsafe { sys::map_camp_at(position.x, position.y, p) })?)
+}
+fn load_camp(h: u32) -> Result<Camp> {
+    let info = query(|p| unsafe { sys::map_camp_info(h, p) })?;
+    let group = query(|p| unsafe { sys::map_camp_group_of(h, p) })?;
+    Ok(Camp::new(
+        CampHandle(h),
+        CampGroupHandle(group),
+        CampType::try_from(info.kind)?,
+        Vec2::new(info.x, info.y),
+    ))
 }
 /// An immutable snapshot of a visible ordinary ward.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -984,18 +1018,7 @@ pub fn altar_locks(team: Option<Team>) -> Result<Vec<AltarLock>> {
 /// # Arguments
 /// * `position` - Current tile of the camp.
 pub fn camp_at(position: Vec2) -> Result<Camp> {
-    let h = query(|p| unsafe { sys::camp_at(position.x, position.y, p) })?;
-    for group in camp_groups()? {
-        for c in group.camps() {
-            if c.handle().0 == h {
-                return Ok(c.clone());
-            }
-        }
-    }
-    Err(Error::local(
-        ErrorCode::InvalidHandle,
-        "invalid camp handle",
-    ))
+    load_camp(query(|p| unsafe { sys::camp_at(position.x, position.y, p) })?)
 }
 /// Return a live wrapper for the visible champion at `position`; absence and hidden tiles are errors.
 ///

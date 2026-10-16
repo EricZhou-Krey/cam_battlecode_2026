@@ -230,10 +230,7 @@ def camp_at(position: Vec2) -> Camp:
     Args:
         position: Tile to query.
     """
-    camp = _map._camp_index()[2].get(_bc.camp_at(position.x, position.y))
-    if camp is None:
-        raise IndexError("invalid camp handle")
-    return camp
+    return _map._camp(_bc.camp_at(position.x, position.y))
 
 
 def champion_at(position: Vec2) -> Champion:
@@ -274,7 +271,7 @@ def champions(team: Optional[Team] = None) -> list[Champion]:
 
 def camps() -> list[Camp]:
     """Return the visible camps."""
-    return _bc.camps_in(camp_tiles(), _map._camp_index()[2])
+    return [camp_at(position) for position in camp_tiles().positions()]
 
 
 def camp_groups() -> list[_map.CampGroup]:

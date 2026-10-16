@@ -4416,6 +4416,46 @@ namespace detail
 	}
 	return handle_access::make_camp_group(static_cast<handle_camp_group_t>(group), info.gold, info.gems, respawn, std::move(camps));
 }
+
+/// Query every static camp group from the engine in one batched call.
+[[nodiscard]] inline std::vector<map::camp_group> load_camp_groups()
+{
+	std::vector<std::uint32_t> words(256);
+	std::uint32_t count{};
+	check(sdk_map_camp_layout(words.data(), static_cast<std::uint32_t>(words.size()), &count));
+	if (count > words.size())
+	{
+		words.resize(count);
+		check(sdk_map_camp_layout(words.data(), count, &count));
+	}
+	std::vector<map::camp_group> result;
+	for (std::size_t i = 0; i + 5 <= count;)
+	{
+		const auto group = words[i];
+		const auto gold = words[i + 1], gems = words[i + 2];
+		const auto respawn = static_cast<std::int32_t>(words[i + 3]);
+		const auto size = words[i + 4];
+		i += 5;
+		std::vector<cambc::camp> camps;
+		camps.reserve(size);
+		for (std::uint32_t m = 0; m < size && i + 4 <= count; ++m, i += 4)
+			camps.push_back(handle_access::make_camp(static_cast<handle_camp_t>(words[i]), static_cast<handle_camp_group_t>(group),
+				static_cast<camp_type>(words[i + 1]), vec2{ static_cast<std::int32_t>(words[i + 2]), static_cast<std::int32_t>(words[i + 3]) }));
+		result.push_back(handle_access::make_camp_group(static_cast<handle_camp_group_t>(group), gold, gems, respawn, std::move(camps)));
+	}
+	return result;
+}
+
+/// Query one physical camp's spawn info and group from the engine.
+[[nodiscard]] inline cambc::camp load_camp(std::uint32_t handle)
+{
+	camp_info spec{};
+	check(sdk_map_camp_info(handle, &spec));
+	std::uint32_t group{};
+	check(sdk_map_camp_group_of(handle, &group));
+	return handle_access::make_camp(static_cast<handle_camp_t>(handle), static_cast<handle_camp_group_t>(group),
+		static_cast<camp_type>(spec.type), vec2{ spec.x, spec.y });
+}
 } // namespace detail
 
 namespace map
@@ -4424,26 +4464,18 @@ namespace map
 /// Query physical camp groups from the engine on every call; also available in draft.
 [[nodiscard]] inline std::vector<camp_group> camp_groups()
 {
-	std::uint32_t count{};
-	detail::check(detail::sdk_map_num_camp_groups(&count));
-	std::vector<std::uint32_t> handles(count);
-	detail::check(detail::sdk_map_camp_groups(handles.data(), count, &count));
-	std::vector<camp_group> result;
-	result.reserve(count);
-	for (std::uint32_t i = 0; i < count; ++i)
-		result.push_back(detail::load_camp_group(handles[i]));
-	return result;
+	return detail::load_camp_groups();
 }
 
 /// Find a camp by spawn tile, querying the engine on every call; throws if there is no camp.
 /// @param position Spawn tile of the camp.
 [[nodiscard]] inline cambc::camp camp(vec2 position)
 {
-	for (const auto& group : camp_groups())
-		for (const auto& member : group)
-			if (member.spawn_position() == position)
-				return member;
-	throw std::out_of_range("no camp on tile");
+	std::uint32_t handle{};
+	const auto code = detail::sdk_map_camp_at(position.x, position.y, &handle);
+	if (code == static_cast<std::int32_t>(error_code::api_not_found)) throw std::out_of_range("no camp on tile");
+	detail::check(code);
+	return detail::load_camp(handle);
 }
 } // namespace map
 
@@ -4732,11 +4764,7 @@ inline void altar_lock_tiles_into(bitboard& out)
 {
 	std::uint32_t handle{};
 	detail::check(detail::sdk_camp_at(position.x, position.y, &handle));
-	for (const auto& group : map::camp_groups())
-		for (const auto& member : group)
-			if (static_cast<handle_camp_t>(member) == static_cast<handle_camp_t>(handle))
-				return member;
-	throw std::out_of_range("invalid camp handle");
+	return detail::load_camp(handle);
 }
 
 /// Create a fresh view of the currently visible champion at a position.

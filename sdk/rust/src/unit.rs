@@ -782,10 +782,6 @@ impl Camp {
             spawn_position,
         }
     }
-    /// Return the stored engine handle.
-    pub(crate) fn handle(&self) -> CampHandle {
-        self.handle
-    }
     /// Return the captured engine camp type.
     #[must_use]
     pub fn kind(&self) -> CampType {

@@ -424,6 +424,18 @@ pub fn call(name: &str, a: &[usize]) -> i64 {
                     );
                     0
                 }
+                "map_camp_layout" => write_truncated(a, &[5u32, 10, 4, 30, 2, 10, 2, 3, 3, 11, 2, 4, 3]),
+                "map_camp_group_of" => {
+                    put(a[1], 5u32);
+                    0
+                }
+                "map_camp_at" => match (a[0], a[1]) {
+                    (3, 3) | (4, 3) => {
+                        put(a[2], if a[0] == 3 { 10u32 } else { 11 });
+                        0
+                    }
+                    _ => 98,
+                },
                 "camp_group_state" => {
                     put(a[1], s.group_state);
                     0
