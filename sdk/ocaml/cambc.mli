@@ -418,6 +418,8 @@ module Error_code : sig
       | Invalid_action_sell_already_sold
       | Invalid_action_sell_gold_overflow
       | Invalid_action_sell_not_on_spawn
+      | Draft_already_picked
+      | Draft_no_champion_selected
       | Unknown of int
 
   (** Every value, in declaration order. *)
@@ -1460,8 +1462,38 @@ module Camp_group : sig
   val state : t -> state
 end
 
+module Camp_state : sig
+  (** An individual camp's captured lifecycle; states are mutually exclusive, not flags. *)
+  type t = Dead | Alive | Asleep
+  (** Check whether the captured state is dead. *)
+  val is_dead : t -> bool
+  (** Check whether the captured state is living, including asleep camps. *)
+  val is_alive : t -> bool
+  (** Check whether the captured state is awake (the [Alive] enum value). *)
+  val is_awake : t -> bool
+  (** Check whether the captured state is living but dormant. *)
+  val is_asleep : t -> bool
+end
+
 module Camp : sig
   type t = camp
+  (** Individual camp lifecycle. [Alive] means awake; [Asleep] means living but dormant. *)
+  type state = Camp_state.t = Dead | Alive | Asleep
+
+  (** Query [Dead], [Alive] (awake), or [Asleep]. The current tile, or last occupied tile
+      when dead, must be in vision; hidden camps raise [Api_not_in_vision].
+      This is separate from the camp-group state.
+      @param c Camp to inspect. *)
+  val state : t -> state
+
+  (** Query whether this camp is dead; uses the same visibility checks as [state]. *)
+  val is_dead : t -> bool
+  (** Query whether this camp is living (awake or asleep); uses the visibility checks of [state]. *)
+  val is_alive : t -> bool
+  (** Query whether this camp is awake; uses the same visibility checks as [state]. *)
+  val is_awake : t -> bool
+  (** Query whether this camp is living but dormant; uses the visibility checks of [state]. *)
+  val is_asleep : t -> bool
 
   type base_stats = {
     vision_radius : float;
@@ -1793,6 +1825,8 @@ module Draft_memory : sig
 end
 
 module Debug : sig
+  (** Drawing is available during draft and gameplay. Both teams' drawings last
+      for the current round and clear at the next round, or when gameplay begins. *)
   (** [draw_dot p rgb] draws a debug dot in the replay.
       @param p Tile to mark.
       @param rgb Packed [0xRRGGBB] colour. *)
@@ -1824,6 +1858,14 @@ val round_number : unit -> int
 val global_submitted_gems : Team.t -> int
 (** Fuel left in the current turn. *)
 val fuel_remaining : unit -> int
+(** [debug_block f] runs [f] without spending fuel when the bot is built in
+    debug mode ([cambc run], the default); skipped entirely in release mode
+    ([--release], and always on the platform). The free budget per block is
+    1000 turns, beyond which the rest is charged; ending the turn inside
+    closes the free window.
+    Usage: [debug_block (fun () -> expensive_debug_operation ())].
+    @param f Runs in debug mode only; never called in release mode. *)
+val debug_block : (unit -> unit) -> unit
 (** End the current turn. *)
 val end_turn : unit -> unit
 (** Resign the game for the bot's team. *)

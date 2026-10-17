@@ -181,9 +181,6 @@ pub fn call(name: &str, a: &[usize]) -> i64 {
                     msg.len() as i64
                 }
                 "champion_ability_props" => {
-                    if s.hidden && a[0] == 2 {
-                        return 97;
-                    }
                     put(a[2], props(if a[1] == 0 { 2 } else { 7 }));
                     0
                 }
@@ -216,6 +213,16 @@ pub fn call(name: &str, a: &[usize]) -> i64 {
                                 ..Default::default()
                             },
                             ..Default::default()
+                        },
+                    );
+                    0
+                }
+                "champion_identity" => {
+                    put(
+                        a[1],
+                        sys::ChampionIdentity {
+                            team: if a[0] == 2 { 1 } else { 0 },
+                            kind: 0,
                         },
                     );
                     0
@@ -311,6 +318,22 @@ pub fn call(name: &str, a: &[usize]) -> i64 {
                 }
                 "wards" => write_list(a, &s.wards),
                 "teleports" => write_list(a, &s.teleports),
+                "teleport_at" => {
+                    if a[0] >= 8 || a[1] >= 8 {
+                        return 96;
+                    }
+                    match s
+                        .teleports
+                        .iter()
+                        .find(|t| t.destination.x == a[0] as i32 && t.destination.y == a[1] as i32)
+                    {
+                        Some(t) => {
+                            put(a[2], *t);
+                            0
+                        }
+                        None => 98,
+                    }
+                }
                 "altar_locks" => write_list(a, &s.locks),
                 "ward_at" | "ally_ward_at" | "enemy_ward_at" | "camp_at" | "champion_at" => {
                     if a[0] >= 8 || a[1] >= 8 {
@@ -544,6 +567,9 @@ pub fn call(name: &str, a: &[usize]) -> i64 {
                 | "debug_dot"
                 | "debug_line"
                 | "resign"
+                | "fuel_pause"
+                | "fuel_resume"
+                | "fuel_adjust"
                 | "yield" => 0,
                 "bc_Bitboard_One" => {
                     put(a[0], u64::MAX);

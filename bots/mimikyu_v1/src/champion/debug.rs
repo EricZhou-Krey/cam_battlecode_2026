@@ -86,7 +86,7 @@ const SAFE_PANEL_ROWS: i32 = 2;
 
 macro_rules! free_fuel {
     ($($body:tt)*) => {
-        $($body)*
+        cambc::debug_block! { $($body)* }
     };
 }
 
