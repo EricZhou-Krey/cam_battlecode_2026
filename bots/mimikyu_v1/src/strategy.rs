@@ -23,7 +23,7 @@ impl Strategy {
                 loop {
                     let pick: ChampionDraft = draft_memory.pick();
                     draft_memory.update(&pick);
-                    if cambc::round_number()? == (cambc::draft::team_size()? as u32) {
+                    if cambc::round_number()? + 1 == (cambc::draft::team_size()? as u32) {
                         let _ = cambc::draft_memory().submit(&draft_memory.bytes);
                     }
                     let _ = cambc::draft::pick(pick);

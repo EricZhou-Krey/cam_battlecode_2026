@@ -3,6 +3,7 @@ use cambc::{Bitboard, Camp, CampGroup, DistanceField, Result, Vec2};
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampGraph {
     pub camp_group_centers: Vec<[u8; 2]>,
+    pub spawn_centers: [[u8; 2]; 2], // [ally, enemy]
     pub closest_altars: Vec<[u8; 2]>,
     pub camp_group_safe: Vec<bool>,
     pub camp_group_danger_level: Vec<u8>,
@@ -15,6 +16,7 @@ pub struct CampGraph {
 
 impl CampGraph {
     pub fn new(ally_spawn_center: [u8; 2], enemy_spawn_center: [u8; 2]) -> Result<CampGraph> {
+        let spawn_centers: [[u8; 2]; 2] = [ally_spawn_center, enemy_spawn_center];
         let camp_groups: Vec<CampGroup> = cambc::map::camp_groups()?;
         let n_camp_groups: usize = camp_groups.len();
         let camp_group_nodes: Vec<Vec<[u8; 2]>> = camp_groups
@@ -124,7 +126,7 @@ impl CampGraph {
         let camp_group_safe: Vec<bool> = camp_groups
             .iter()
             .map(|camp_group: &CampGroup| {
-                camp_group
+                !camp_group
                     .camps()
                     .iter()
                     .any(|camp: &Camp| camp.is_wolf() | camp.is_elk() | camp.is_monolith())
@@ -138,7 +140,7 @@ impl CampGraph {
                     .camps()
                     .iter()
                     .fold(0, |acc, camp: &Camp| {
-                        acc + match (camp.is_wolf(), camp.is_elk(), camp.is_elk()) {
+                        acc + match (camp.is_wolf(), camp.is_elk(), camp.is_monolith()) {
                             (true, _, _) => 1,
                             (_, true, _) => 2,
                             (_, _, true) => 4,
@@ -161,6 +163,7 @@ impl CampGraph {
 
         Ok(Self {
             camp_group_centers,
+            spawn_centers,
             closest_altars,
             camp_group_safe,
             camp_group_danger_level,
@@ -184,10 +187,10 @@ impl<'a> CampSpawnDistanceMatrix<'a> {
         let n: usize = self.distances_to_camp.len();
         if from < n && to < n {
             self.distances_to_camp[from][to]
-        } else if from > n && to < n {
+        } else if from >= n && to < n {
             let spawn_from: usize = from - n;
             self.distances_to_spawns[to][spawn_from]
-        } else if from < n && to > n {
+        } else if from < n && to >= n {
             let spawn_to: usize = to - n;
             self.distances_to_spawns[from][spawn_to]
         } else {
@@ -200,7 +203,7 @@ impl<'a> CampSpawnDistanceMatrix<'a> {
     }
 
     pub fn len(&self) -> usize {
-        self.distances_to_camp.len() + self.distances_to_spawns.len()
+        self.distances_to_camp.len() + 2
     }
 }
 
@@ -210,12 +213,14 @@ pub trait Center {
 
 impl Center for Vec<[u8; 2]> {
     fn center(&self) -> [u8; 2] {
-        let sum: [u8; 2] = self
+        let (sx, sy) = self
             .iter()
-            .fold([0_u8, 0_u8], |acc, v| [acc[0] + v[0], acc[1] + v[1]]);
-        [sum[0] / self.len() as u8, sum[1] / self.len() as u8]
+            .fold((0u32, 0u32), |(x, y), v| (x + v[0] as u32, y + v[1] as u32));
+        let n = self.len().max(1) as u32;
+        [(sx / n) as u8, (sy / n) as u8]
     }
 }
+
 impl Center for Bitboard {
     fn center(&self) -> [u8; 2] {
         self.positions()
