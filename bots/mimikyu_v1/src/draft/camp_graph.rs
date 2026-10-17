@@ -1,4 +1,6 @@
-use cambc::{Bitboard, Camp, CampGroup, DistanceField, Result, Vec2};
+use cambc::{Bitboard, CampGroup, DistanceField, Result, Vec2};
+
+const BULK_EXPORT: bool = true;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampGraph {
@@ -19,19 +21,41 @@ impl CampGraph {
         let spawn_centers: [[u8; 2]; 2] = [ally_spawn_center, enemy_spawn_center];
         let camp_groups: Vec<CampGroup> = cambc::map::camp_groups()?;
         let n_camp_groups: usize = camp_groups.len();
-        let camp_group_nodes: Vec<Vec<[u8; 2]>> = camp_groups
-            .iter()
-            .map(|camp_group: &CampGroup| {
-                camp_group
-                    .camps()
-                    .iter()
-                    .map(|camp: &Camp| {
-                        let camp_position: Vec2 = camp.spawn_position();
-                        [camp_position.x as u8, camp_position.y as u8]
-                    })
-                    .collect()
-            })
-            .collect();
+
+        let mut camp_group_nodes: Vec<Vec<[u8; 2]>> = Vec::with_capacity(n_camp_groups);
+        let mut camp_group_safe: Vec<bool> = Vec::with_capacity(n_camp_groups);
+        let mut camp_group_danger_level: Vec<u8> = Vec::with_capacity(n_camp_groups);
+        let mut camp_group_gold: Vec<u8> = Vec::with_capacity(n_camp_groups);
+        let mut camp_group_gem: Vec<u8> = Vec::with_capacity(n_camp_groups);
+        for camp_group in &camp_groups {
+            let mut nodes: Vec<[u8; 2]> = Vec::new();
+            let mut safe: bool = true;
+            let mut danger: u32 = 0;
+            for camp in camp_group.camps().iter() {
+                let position: Vec2 = camp.spawn_position();
+                nodes.push([position.x as u8, position.y as u8]);
+                let wolf: bool = camp.is_wolf();
+                let elk: bool = camp.is_elk();
+                let monolith: bool = camp.is_monolith();
+                if wolf | elk | monolith {
+                    safe = false;
+                }
+                danger += if wolf {
+                    1
+                } else if elk {
+                    2
+                } else if monolith {
+                    4
+                } else {
+                    0
+                };
+            }
+            camp_group_nodes.push(nodes);
+            camp_group_safe.push(safe);
+            camp_group_danger_level.push(danger.min(15) as u8);
+            camp_group_gold.push(camp_group.gold_value() as u8);
+            camp_group_gem.push(camp_group.gem_value() as u8);
+        }
 
         let camp_group_centers: Vec<[u8; 2]> = camp_group_nodes
             .iter()
@@ -48,8 +72,26 @@ impl CampGraph {
             .collect();
 
         let blocked_bitboard: Bitboard = cambc::map::walls()?.union(cambc::map::holes()?)?;
+        let map_width: usize = cambc::map::width()? as usize;
+        let map_height: usize = cambc::map::height()? as usize;
+        let tile_index = |position: [u8; 2]| -> usize {
+            position[1] as usize * map_width + position[0] as usize
+        };
 
-        for camp_group in &camp_groups {
+        let center_indices: Vec<usize> = camp_group_centers
+            .iter()
+            .map(|&center: &[u8; 2]| tile_index(center))
+            .collect();
+        let altar_indices: Vec<usize> = altars
+            .iter()
+            .map(|&altar: &[u8; 2]| tile_index(altar))
+            .collect();
+        let ally_index: usize = tile_index(ally_spawn_center);
+        let enemy_index: usize = tile_index(enemy_spawn_center);
+        let mut field_buffer: Vec<u16> = vec![0; map_width * map_height];
+        let saturate = |value: u16| -> u8 { value.min(u8::MAX as u16) as u8 };
+
+        for (group_index, camp_group) in camp_groups.iter().enumerate() {
             let mut distance_field: DistanceField = DistanceField::new()?;
             distance_field.compute(
                 &blocked_bitboard,
@@ -57,14 +99,26 @@ impl CampGraph {
                 &mut Bitboard::new()?,
                 u16::MAX,
             )?;
+            if BULK_EXPORT {
+                distance_field.export_linear_buffer_into(&mut field_buffer)?;
+            }
+            let lookup = |position: [u8; 2], tile: usize| -> Result<u8> {
+                if BULK_EXPORT {
+                    Ok(saturate(field_buffer[tile]))
+                } else {
+                    distance_field
+                        .get(Vec2 {
+                            x: position[0] as i32,
+                            y: position[1] as i32,
+                        })
+                        .map(saturate)
+                }
+            };
 
             let mut closest_altar_distance: u8 = u8::MAX;
             let mut closest_altar: [u8; 2] = [0, 0];
-            for altar in altars.iter() {
-                let distance = distance_field.get(Vec2 {
-                    x: altar[0] as i32,
-                    y: altar[1] as i32,
-                })? as u8;
+            for (altar, &altar_index) in altars.iter().zip(altar_indices.iter()) {
+                let distance: u8 = lookup(*altar, altar_index)?;
                 if distance < closest_altar_distance {
                     closest_altar = *altar;
                     closest_altar_distance = distance;
@@ -73,34 +127,17 @@ impl CampGraph {
             closest_altars.push(closest_altar);
 
             camp_group_spawn_distances.push([
-                distance_field
-                    .get(Vec2 {
-                        x: ally_spawn_center[0] as i32,
-                        y: ally_spawn_center[1] as i32,
-                    })
-                    .unwrap() as u8,
-                distance_field
-                    .get(Vec2 {
-                        x: enemy_spawn_center[0] as i32,
-                        y: enemy_spawn_center[1] as i32,
-                    })
-                    .unwrap() as u8,
+                lookup(ally_spawn_center, ally_index)?,
+                lookup(enemy_spawn_center, enemy_index)?,
             ]);
 
-            camp_group_distances.push(
-                camp_group_centers
-                    .iter()
-                    .map(move |&[x, y]: &[u8; 2]| {
-                        distance_field
-                            .get(Vec2 {
-                                x: x as i32,
-                                y: y as i32,
-                            })
-                            .map(|distance| distance as u8)
-                    })
-                    .collect::<Result<Vec<u8>>>()?,
-            );
+            let mut row: Vec<u8> = Vec::with_capacity(camp_group_centers.len());
+            for (&center, &center_index) in camp_group_centers.iter().zip(center_indices.iter()) {
+                row.push(lookup(center, center_index)?);
+            }
+            camp_group_distances.push(row);
         }
+
         let mut ally_spawn_field: DistanceField = DistanceField::new()?;
         let mut ally_spawn_bitboard: Bitboard = Bitboard::new()?;
         let _ = ally_spawn_bitboard.set(
@@ -122,44 +159,6 @@ impl CampGraph {
                 y: enemy_spawn_center[1] as i32,
             })
             .unwrap() as u8;
-
-        let camp_group_safe: Vec<bool> = camp_groups
-            .iter()
-            .map(|camp_group: &CampGroup| {
-                !camp_group
-                    .camps()
-                    .iter()
-                    .any(|camp: &Camp| camp.is_wolf() | camp.is_elk() | camp.is_monolith())
-            })
-            .collect();
-
-        let camp_group_danger_level: Vec<u8> = camp_groups
-            .iter()
-            .map(|camp_group: &CampGroup| {
-                camp_group
-                    .camps()
-                    .iter()
-                    .fold(0, |acc, camp: &Camp| {
-                        acc + match (camp.is_wolf(), camp.is_elk(), camp.is_monolith()) {
-                            (true, _, _) => 1,
-                            (_, true, _) => 2,
-                            (_, _, true) => 4,
-                            _ => 0,
-                        }
-                    })
-                    .clamp(0, 15)
-            })
-            .collect();
-
-        let camp_group_gold: Vec<u8> = camp_groups
-            .iter()
-            .map(|camp_group: &CampGroup| camp_group.gold_value() as u8)
-            .collect();
-
-        let camp_group_gem: Vec<u8> = camp_groups
-            .iter()
-            .map(|camp_group: &CampGroup| camp_group.gem_value() as u8)
-            .collect();
 
         Ok(Self {
             camp_group_centers,

@@ -18,6 +18,153 @@ pub struct LaneGraph {
     pub safe_lanes: [Vec<usize>; 8],
 }
 
+struct Dense {
+    n: usize,
+    d: Vec<u8>,
+}
+
+impl Dense {
+    fn new(distance_matrix: &CampSpawnDistanceMatrix) -> Self {
+        let camp_count: usize = distance_matrix.distances_to_camp.len();
+        let n: usize = camp_count + 2;
+        let mut d: Vec<u8> = Vec::with_capacity(n * n);
+        for camp in 0..camp_count {
+            d.extend_from_slice(&distance_matrix.distances_to_camp[camp]);
+            d.push(distance_matrix.distances_to_spawns[camp][0]);
+            d.push(distance_matrix.distances_to_spawns[camp][1]);
+        }
+        for spawn in 0..2 {
+            for camp in 0..camp_count {
+                d.push(distance_matrix.distances_to_spawns[camp][spawn]);
+            }
+            d.push(*distance_matrix.spawns_distance);
+            d.push(*distance_matrix.spawns_distance);
+        }
+        Self { n, d }
+    }
+
+    #[inline(always)]
+    fn get(&self, from: usize, to: usize) -> i32 {
+        self.d[from * self.n + to] as i32
+    }
+}
+
+fn sorted_by_distance(dense: &Dense, origin: usize, nodes: &[usize]) -> Vec<usize> {
+    let mut counts: [usize; 257] = [0; 257];
+    for &node in nodes {
+        counts[dense.get(origin, node) as usize + 1] += 1;
+    }
+    for value in 1..257 {
+        counts[value] += counts[value - 1];
+    }
+    let mut sorted: Vec<usize> = vec![0; nodes.len()];
+    for &node in nodes {
+        let slot: &mut usize = &mut counts[dense.get(origin, node) as usize];
+        sorted[*slot] = node;
+        *slot += 1;
+    }
+    sorted
+}
+
+fn limit_table() -> [i32; 256] {
+    let mut table: [i32; 256] = [0; 256];
+    for distance in 0..256 {
+        table[distance] = ((1.0 + NEIGHBOUR_LINEAR_TOLERANCE) * distance as f32
+            + NEIGHBOUR_CONSTANT_TOLERANCE)
+            .floor() as i32;
+    }
+    table
+}
+
+fn all_near_lists(dense: &Dense) -> Vec<Vec<usize>> {
+    let n: usize = dense.n;
+    let mut lists: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for origin in 0..n {
+        let row: &[u8] = &dense.d[origin * n..origin * n + n];
+        let row_max: usize = row.iter().copied().max().unwrap_or(0) as usize;
+        let mut counts: Vec<usize> = vec![0; row_max + 2];
+        for &value in row {
+            counts[value as usize + 1] += 1;
+        }
+        for value in 1..counts.len() {
+            counts[value] += counts[value - 1];
+        }
+        let mut sorted: Vec<usize> = vec![0; n];
+        for (node, &value) in row.iter().enumerate() {
+            let slot: &mut usize = &mut counts[value as usize];
+            sorted[*slot] = node;
+            *slot += 1;
+        }
+        lists.push(sorted);
+    }
+    lists
+}
+
+fn neighbour_edges(
+    dense: &Dense,
+    nodes: &[usize],
+    near: &[Vec<usize>],
+    limits: &[i32; 256],
+) -> Vec<(usize, usize)> {
+    let n: usize = dense.n;
+    let mut edges: Vec<(usize, usize)> = Vec::new();
+    for (position, &from) in nodes.iter().enumerate() {
+        let row_from: &[u8] = &dense.d[from * n..from * n + n];
+        let near_from: &[usize] = &near[from];
+        for &to in &nodes[position + 1..] {
+            let limit: i32 = limits[row_from[to] as usize];
+            let mut blocked: bool = false;
+            for &middle in near_from {
+                let first_leg: i32 = row_from[middle] as i32;
+                if first_leg > limit {
+                    break;
+                }
+                if middle != from
+                    && middle != to
+                    && first_leg + dense.d[middle * n + to] as i32 <= limit
+                {
+                    blocked = true;
+                    break;
+                }
+            }
+            if !blocked {
+                edges.push((from, to));
+            }
+        }
+    }
+    edges
+}
+
+fn gap_detour(
+    dense: &Dense,
+    spine: &[usize],
+    ally: usize,
+    enemy: usize,
+    camp: usize,
+    gap: usize,
+) -> i32 {
+    let previous: usize = if gap == 0 { ally } else { spine[gap - 1] };
+    let next: usize = if gap == spine.len() {
+        enemy
+    } else {
+        spine[gap]
+    };
+    dense.get(previous, camp) + dense.get(camp, next) - dense.get(previous, next)
+}
+
+fn best_gap(
+    dense: &Dense,
+    spine: &[usize],
+    ally: usize,
+    enemy: usize,
+    camp: usize,
+) -> (i32, usize) {
+    (0..=spine.len())
+        .map(|gap: usize| (gap_detour(dense, spine, ally, enemy, camp, gap), gap))
+        .min()
+        .unwrap()
+}
+
 impl LaneGraph {
     pub fn new(camp_graph: &CampGraph, distance_matrix: &CampSpawnDistanceMatrix) -> Self {
         let mut estimated_value: Vec<u16> = camp_graph
@@ -41,64 +188,47 @@ impl LaneGraph {
         let mut safe: Vec<bool> = camp_graph.camp_group_safe.clone();
         safe.extend([true, true]);
 
-        let mut neighbour_graph: Vec<(usize, usize)> = Vec::new();
-        let n: usize = distance_matrix.len();
-        for from_index in 0..n {
-            for to_index in from_index + 1..n {
-                let max_distance: f32 = (1.0 + NEIGHBOUR_LINEAR_TOLERANCE)
-                    * distance_matrix.get(from_index, to_index) as f32
-                    + NEIGHBOUR_CONSTANT_TOLERANCE;
-                if (0..n).any(|inbetween_index: usize| {
-                    inbetween_index != from_index
-                        && inbetween_index != to_index
-                        && (distance_matrix.get(from_index, inbetween_index)
-                            + distance_matrix.get(inbetween_index, to_index))
-                            as f32
-                            <= max_distance
-                }) {
-                    continue;
-                }
-                neighbour_graph.push((from_index, to_index));
-            }
-        }
+        let dense: Dense = Dense::new(distance_matrix);
 
-        let mut safe_neighbour_graph: Vec<(usize, usize)> = Vec::new();
-        let mut filtered_indicies: Vec<usize> = (0_usize..n - 2)
-            .filter(|i| camp_graph.camp_group_safe[*i])
+        let n: usize = dense.n;
+
+        let limits: [i32; 256] = limit_table();
+        let near: Vec<Vec<usize>> = all_near_lists(&dense);
+
+        let all_nodes: Vec<usize> = (0..n).collect();
+        let neighbour_graph: Vec<(usize, usize)> =
+            neighbour_edges(&dense, &all_nodes, &near, &limits);
+
+        let mut safe_nodes: Vec<usize> = (0_usize..n - 2)
+            .filter(|&index: &usize| camp_graph.camp_group_safe[index])
             .collect();
-        filtered_indicies.extend([n - 2, n - 1]);
-        for (filtered_index, &from_index) in filtered_indicies.iter().enumerate() {
-            for &to_index in filtered_indicies[filtered_index..].iter() {
-                let max_distance: f32 = (1.0 + NEIGHBOUR_LINEAR_TOLERANCE)
-                    * distance_matrix.get(from_index, to_index) as f32
-                    + NEIGHBOUR_CONSTANT_TOLERANCE;
-                if filtered_indicies.iter().any(|&inbetween_index: &usize| {
-                    inbetween_index != from_index
-                        && inbetween_index != to_index
-                        && (distance_matrix.get(from_index, inbetween_index)
-                            + distance_matrix.get(inbetween_index, to_index))
-                            as f32
-                            <= max_distance
-                }) {
-                    continue;
-                }
-                safe_neighbour_graph.push((from_index, to_index));
-            }
+        safe_nodes.extend([n - 2, n - 1]);
+        let mut is_safe_node: Vec<bool> = vec![false; n];
+        for &node in &safe_nodes {
+            is_safe_node[node] = true;
         }
+        let mut safe_near: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for &origin in &safe_nodes {
+            safe_near[origin] = near[origin]
+                .iter()
+                .copied()
+                .filter(|&node: &usize| is_safe_node[node])
+                .collect();
+        }
+        let safe_neighbour_graph: Vec<(usize, usize)> =
+            neighbour_edges(&dense, &safe_nodes, &safe_near, &limits);
 
         Self {
             value_lanes: Self::calculate_lanes(
                 &neighbour_graph,
-                distance_matrix,
-                camp_graph,
+                &dense,
                 &estimated_value,
                 &spawn_delta,
                 &vec![true; n],
             ),
             safe_lanes: Self::calculate_lanes(
                 &safe_neighbour_graph,
-                distance_matrix,
-                camp_graph,
+                &dense,
                 &estimated_value,
                 &spawn_delta,
                 &safe,
@@ -108,14 +238,13 @@ impl LaneGraph {
 
     fn calculate_lanes(
         edges: &[(usize, usize)],
-        distance_matrix: &CampSpawnDistanceMatrix,
-        camp_graph: &CampGraph,
+        dense: &Dense,
         estimated_value: &[u16],
         spawn_delta: &[i16],
         allowed: &[bool],
     ) -> [Vec<usize>; N_LANES] {
-        let camp_count: usize = camp_graph.camp_group_centers.len();
-        let node_count: usize = camp_count + 2;
+        let node_count: usize = estimated_value.len();
+        let camp_count: usize = node_count - 2;
         let ally: usize = camp_count;
         let enemy: usize = camp_count + 1;
         let mut out: [Vec<usize>; N_LANES] = [const { Vec::new() }; N_LANES];
@@ -168,7 +297,7 @@ impl LaneGraph {
                     .iter()
                     .copied()
                     .filter(|&other: &usize| rank[other] > rank[node])
-                    .min_by_key(|&other: &usize| (distance_matrix.get(node, other), other))
+                    .min_by_key(|&other: &usize| (dense.get(node, other), other))
                     .unwrap();
                 successors[node].push(next);
                 has_predecessor[next] = true;
@@ -178,15 +307,14 @@ impl LaneGraph {
                     .iter()
                     .copied()
                     .filter(|&other: &usize| rank[other] < rank[node])
-                    .min_by_key(|&other: &usize| (distance_matrix.get(other, node), other))
+                    .min_by_key(|&other: &usize| (dense.get(other, node), other))
                     .unwrap();
                 successors[previous].push(node);
                 has_predecessor[node] = true;
             }
         }
 
-        let dist =
-            |first: usize, second: usize| -> i32 { distance_matrix.get(first, second) as i32 };
+        let dist = |first: usize, second: usize| -> i32 { dense.get(first, second) };
 
         let shortest_lane = |uses: &[i32], value_weight: i32| -> Option<Vec<usize>> {
             let mut best: Vec<i32> = vec![i32::MAX; node_count];
@@ -233,34 +361,66 @@ impl LaneGraph {
                 .copied()
                 .filter(|&node: &usize| node < camp_count && !spine.contains(&node))
                 .collect();
+            let mut best_gaps: Vec<(i32, usize)> = pending
+                .iter()
+                .map(|&camp: &usize| best_gap(dense, &spine, ally, enemy, camp))
+                .collect();
+
             loop {
-                let mut best_insert: Option<(i32, usize, usize)> = None;
-                for &camp in &pending {
-                    for position in 0..=spine.len() {
-                        let previous: usize = if position == 0 {
-                            ally
-                        } else {
-                            spine[position - 1]
-                        };
-                        let next: usize = if position == spine.len() {
-                            enemy
-                        } else {
-                            spine[position]
-                        };
-                        let detour: i32 =
-                            dist(previous, camp) + dist(camp, next) - dist(previous, next);
-                        let candidate: (i32, usize, usize) = (detour, camp, position);
-                        if best_insert.is_none_or(|current| candidate < current) {
-                            best_insert = Some(candidate);
-                        }
+                let mut choice: Option<(i32, usize, usize, usize)> = None;
+                for (pending_index, &(detour, gap)) in best_gaps.iter().enumerate() {
+                    let candidate: (i32, usize, usize, usize) =
+                        (detour, pending[pending_index], gap, pending_index);
+                    if choice.is_none_or(|current| {
+                        (candidate.0, candidate.1, candidate.2) < (current.0, current.1, current.2)
+                    }) {
+                        choice = Some(candidate);
                     }
                 }
-                match best_insert {
-                    Some((detour, camp, position)) if detour <= ABSORB_DETOUR => {
-                        spine.insert(position, camp);
-                        pending.retain(|&other: &usize| other != camp);
+                let Some((detour, camp, gap, pending_index)) = choice else {
+                    break;
+                };
+                if detour > ABSORB_DETOUR {
+                    break;
+                }
+
+                spine.insert(gap, camp);
+                pending.swap_remove(pending_index);
+                best_gaps.swap_remove(pending_index);
+
+                let previous: usize = if gap == 0 { ally } else { spine[gap - 1] };
+                let next: usize = if gap + 1 == spine.len() {
+                    enemy
+                } else {
+                    spine[gap + 1]
+                };
+                for (index, &other) in pending.iter().enumerate() {
+                    let (current_detour, current_gap): (i32, usize) = best_gaps[index];
+                    if current_gap == gap {
+                        best_gaps[index] = best_gap(dense, &spine, ally, enemy, other);
+                        continue;
                     }
-                    _ => break,
+                    let shifted_gap: usize = if current_gap > gap {
+                        current_gap + 1
+                    } else {
+                        current_gap
+                    };
+                    let mut best: (i32, usize) = (current_detour, shifted_gap);
+                    let left: (i32, usize) = (
+                        dist(previous, other) + dist(other, camp) - dist(previous, camp),
+                        gap,
+                    );
+                    let right: (i32, usize) = (
+                        dist(camp, other) + dist(other, next) - dist(camp, next),
+                        gap + 1,
+                    );
+                    if left < best {
+                        best = left;
+                    }
+                    if right < best {
+                        best = right;
+                    }
+                    best_gaps[index] = best;
                 }
             }
 
