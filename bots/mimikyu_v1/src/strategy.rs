@@ -1,4 +1,7 @@
-use crate::draft::memory::DraftMemory;
+use crate::{
+    champion::{debug::MemoryDebug, memory::ChampionMemory},
+    draft::memory::DraftMemory,
+};
 use cambc::{ChampionDraft, Result};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,9 +34,13 @@ impl Strategy {
                 }
             }
             Self::Champion => {
-                cambc::end_turn();
+                let champion_memory: ChampionMemory =
+                    ChampionMemory::from_bytes(cambc::draft_memory().bytes().try_into().unwrap());
+                loop {
+                    let _ = champion_memory.draw_debug();
+                    cambc::end_turn();
+                }
             }
         }
-        Ok(())
     }
 }

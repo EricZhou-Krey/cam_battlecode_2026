@@ -9,28 +9,28 @@ use std::ops::Range;
 /**
 
 DraftMemory
-bytes[0..15]      = 5 x InitialChampionState   (3 bytes each)  - 15 bytes
-bytes[15..519]    = 8 x Lane Value             (63 bytes each) - 504 bytes
-bytes[519..1007]  = 8 x Lane Safe              (61 bytes each) - 488 bytes
-bytes[1007..1023] = 8 x Contested Camps        (2 bytes each)  - 16 bytes
-added - > bytes[1023..1024] = 1 x Spanning Value Lanes         - 1 bytes
-added - > bytes[1024..1025] = 1 x Spanning Safe Lane s         - 1 bytes
-bytes[1025..1028] = Padding                                    - 3 bytes
+bytes[0..15]      = 5 x InitialChampionState       (3 bytes each)  - 15 bytes
+bytes[15..519]    = 8 x Lane Value                 (63 bytes each) - 504 bytes
+bytes[519..1007]  = 8 x Lane Safe                  (61 bytes each) - 488 bytes
+bytes[1007..1023] = 8 x Contested Camps            (2 bytes each)  - 16 bytes
+bytes[1023]       = 2 x Lanes Counts [value, safe] (4 bits each)   - 1 byte
 
-Total = 1023 bytes
+Total = 1024 bytes
 
 **/
-const LANE_SLOTS: usize = 8;
-const CHAMPION_STATES: usize = 5;
-const CHAMPION_STATE_BYTES: usize = 3;
-const LANES_OFFSET: usize = 15;
-const VALUE_LANE_BYTES: usize = 63;
-const SAFE_LANE_BYTES: usize = 61;
-const SAFE_OFFSET: usize = LANES_OFFSET + LANE_SLOTS * VALUE_LANE_BYTES;
-const CONTESTED_OFFSET: usize = SAFE_OFFSET + LANE_SLOTS * SAFE_LANE_BYTES;
-const CONTESTED_BYTES: usize = 16;
-const LANE_CHAMPION_BYTE_OFFSET: usize = 41;
-const SPANNING_OFFSET: usize = CONTESTED_OFFSET + CONTESTED_BYTES;
+pub const DRAFT_MEMORY_BYTES: usize = 1024;
+pub const LANE_SLOTS: usize = 8;
+pub const CHAMPION_STATES: usize = 5;
+pub const CHAMPION_STATE_BYTES: usize = 3;
+pub const LANES_OFFSET: usize = 15;
+pub const VALUE_LANE_BYTES: usize = 63;
+pub const SAFE_LANE_BYTES: usize = 61;
+pub const SAFE_OFFSET: usize = LANES_OFFSET + LANE_SLOTS * VALUE_LANE_BYTES;
+pub const CONTESTED_OFFSET: usize = SAFE_OFFSET + LANE_SLOTS * SAFE_LANE_BYTES;
+pub const CONTESTED_BYTES: usize = 16;
+pub const LANE_CHAMPION_BYTE_OFFSET: usize = 41;
+pub const SPANNING_OFFSET: usize = CONTESTED_OFFSET + CONTESTED_BYTES;
+const _: () = assert!(SPANNING_OFFSET < DRAFT_MEMORY_BYTES);
 
 fn fixed<T: Copy + Default, const N: usize>(items: impl IntoIterator<Item = T>) -> [T; N] {
     let mut out: [T; N] = [T::default(); N];
@@ -88,7 +88,7 @@ pub struct DraftMemory {
     champion_byte_offset: usize,
     value_lane_4bit_offset: [u8; 8],
     value_lane_mid_camp_locations: [[u8; 2]; 8],
-    pub bytes: [u8; 1028],
+    pub bytes: [u8; DRAFT_MEMORY_BYTES],
 }
 
 impl Default for DraftMemory {
@@ -97,14 +97,14 @@ impl Default for DraftMemory {
             champion_byte_offset: 0,
             value_lane_4bit_offset: [0; 8],
             value_lane_mid_camp_locations: [[0; 2]; 8],
-            bytes: [0; 1028],
+            bytes: [0; DRAFT_MEMORY_BYTES],
         }
     }
 }
 
 impl DraftMemory {
     pub fn new() -> Self {
-        let mut bytes: [u8; 1028] = [0; 1028];
+        let mut bytes: [u8; DRAFT_MEMORY_BYTES] = [0; DRAFT_MEMORY_BYTES];
         let ally_spawn_center: [u8; 2] = cambc::map::spawn_region(Team::Ally).unwrap().center();
         let enemy_spawn_center: [u8; 2] = cambc::map::spawn_region(Team::Enemy).unwrap().center();
 
@@ -170,8 +170,9 @@ impl DraftMemory {
         bytes[CONTESTED_OFFSET..CONTESTED_OFFSET + CONTESTED_BYTES]
             .copy_from_slice(&Self::generate_contested_camps(&lane_graph, &camp_graph));
 
-        bytes[SPANNING_OFFSET..SPANNING_OFFSET + 2]
-            .copy_from_slice(&lane_graph.spanning_lane_index(&camp_graph, MAX_LANE_CAMPS));
+        let spanning: [u8; 2] = lane_graph.spanning_lane_index(&camp_graph, MAX_LANE_CAMPS);
+        bytes[SPANNING_OFFSET] =
+            ((spanning[0] & 0x7F).min(0x0F) << 4) | (spanning[1] & 0x7F).min(0x0F);
 
         DraftMemory {
             champion_byte_offset: 0,
