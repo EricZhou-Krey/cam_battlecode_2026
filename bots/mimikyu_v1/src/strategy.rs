@@ -44,10 +44,9 @@ impl Strategy {
                         cambc::draft_memory().bytes().try_into().unwrap(),
                     ));
 
-                //let mut champion_state: ChampionStrategyState =
-                //    ChampionStrategyState::new(&champion_memory);
-                let mut champion_state: ChampionStrategyState = ChampionStrategyState::Farm;
-                FarmStrategy::init_data(&mut champion_memory);
+                let mut champion_state: ChampionStrategyState =
+                    ChampionStrategyState::new(&champion_memory);
+                champion_state.init(&mut champion_memory);
 
                 loop {
                     //let _ = champion_memory.draw_debug();

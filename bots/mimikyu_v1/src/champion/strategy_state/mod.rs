@@ -1,8 +1,10 @@
+use cambc::Camp;
+
 use crate::champion::{
     champion_preference::CHAMPION_CHOICE_STRATEGY,
-    memory::{AltarID, CampID, ChampionMemory},
+    memory::ChampionMemory,
     strategy_state::{
-        farm::{FarmAction, FarmStrategy},
+        farm::{FarmData, FarmStrategy},
         hunt::HuntStrategy,
         scout::ScoutStrategy,
         sneak::SneakStrategy,
@@ -29,11 +31,7 @@ pub enum ChampionStrategyState {
 pub enum StrategyData {
     #[default]
     Idle,
-    Farm {
-        current_action: FarmAction,
-        target_camp: Option<CampID>,
-        target_altar: Option<AltarID>,
-    },
+    Farm(FarmData),
     Scout,
     Hunt,
     Sneak,
@@ -48,6 +46,16 @@ pub trait StrategyState {
 impl ChampionStrategyState {
     pub fn new(memory: &ChampionMemory) -> ChampionStrategyState {
         CHAMPION_CHOICE_STRATEGY[memory.state.champion_type as usize].clone()
+    }
+
+    pub fn init(&mut self, memory: &mut ChampionMemory) {
+        match self {
+            Self::Idle => (),
+            Self::Farm => FarmStrategy::init_data(memory),
+            Self::Scout => ScoutStrategy::init_data(memory),
+            Self::Hunt => HuntStrategy::init_data(memory),
+            Self::Sneak => SneakStrategy::init_data(memory),
+        }
     }
 
     pub fn turn(&mut self, memory: &mut ChampionMemory) {

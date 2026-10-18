@@ -1,7 +1,7 @@
 use crate::{
     camp::combat::CampCombatPredictionExtension,
     champion::{
-        memory::CampID,
+        memory::{AltarID, CampID},
         strategy_state::{ChampionMemory, ChampionStrategyState, StrategyData, StrategyState},
     },
     movement::step_with_fallback,
@@ -17,6 +17,14 @@ pub enum FarmAction {
     InCombatWithCamp,
     CapturingCamp,
     DeliverToAltar,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FarmData {
+    current_action: FarmAction,
+    target_camp: Option<CampID>,
+    target_altar: Option<AltarID>,
+    target_internal_camp_priority_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,25 +60,30 @@ impl FarmStrategy {
 
 impl StrategyState for FarmStrategy {
     fn init_data(memory: &mut ChampionMemory) {
-        memory.strategy_data = StrategyData::Farm {
+        memory.strategy_data = StrategyData::Farm(FarmData {
             current_action: FarmAction::MoveToCamp,
             target_camp: None,
             target_altar: None,
-        };
+            target_internal_camp_priority_index: None,
+        });
     }
 
     fn turn(memory: &mut ChampionMemory) {
-        let StrategyData::Farm {
+        let StrategyData::Farm(FarmData {
             current_action,
             target_camp,
-            target_altar: _,
-        } = &memory.strategy_data
+            ..
+        }) = memory.strategy_data.clone()
         else {
-            println!("State - Data Desync Error in: State {:?} - Data {:?}, fallback init data and calling turn again may be unintended behaviour", Self, memory.strategy_data);
+            println!(
+                "State - Data Desync Error in: State {:?} - Data {:?}",
+                Self, memory.strategy_data
+            );
             Self::init_data(memory);
             Self::turn(memory);
             return;
         };
+
         let me: &Champion = cambc::self_champion().unwrap().unwrap();
 
         match current_action {
@@ -78,25 +91,47 @@ impl StrategyState for FarmStrategy {
                 todo!();
             }
             FarmAction::MoveToCamp => {
-                let move_to_camp_id: CampID = match target_camp {
-                    Some(camp_id) => *camp_id,
+                let move_to_camp_id = match target_camp {
+                    Some(camp_id) => camp_id,
                     None => {
-                        let camp_id: CampID = Self::find_target_camp(memory);
-                        match &mut memory.strategy_data {
-                            StrategyData::Farm { target_camp, .. } => {
-                                *target_camp = Some(camp_id);
-                            }
-                            _ => return,
+                        let camp_id = Self::find_target_camp(memory);
+
+                        if let StrategyData::Farm(FarmData { target_camp, .. }) =
+                            &mut memory.strategy_data
+                        {
+                            *target_camp = Some(camp_id);
                         }
+
                         camp_id
                     }
                 };
 
-                let _: bool = step_with_fallback(
+                let _ = step_with_fallback(
                     me,
                     memory.camp_distance_fields.get(move_to_camp_id),
-                    memory.camp_centers[move_to_camp_id.0],
+                    cambc::map::camp_groups().unwrap()[move_to_camp_id.0].camps()
+                        [memory.camp_target_order[move_to_camp_id.0][0].0]
+                        .position()
+                        .unwrap(),
                 );
+
+                if memory
+                    .camp_distance_fields
+                    .get(move_to_camp_id)
+                    .get(me.position().unwrap())
+                    .unwrap()
+                    <= 2
+                {
+                    if let StrategyData::Farm(FarmData {
+                        current_action,
+                        target_internal_camp_priority_index,
+                        ..
+                    }) = &mut memory.strategy_data
+                    {
+                        *current_action = FarmAction::InCombatWithCamp;
+                        *target_internal_camp_priority_index = Some(0);
+                    }
+                }
             }
             FarmAction::InCombatWithCamp => {
                 todo!();
