@@ -43,7 +43,7 @@ impl CampGraph {
                 } else if elk {
                     2
                 } else if monolith {
-                    4
+                    10
                 } else {
                     0
                 };

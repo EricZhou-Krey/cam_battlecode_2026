@@ -6,12 +6,14 @@ use crate::{
         combat::TargetPriorityExtension,
     },
     champion::{
+        champion_preference::CHAMPION_CHOICE_STRATEGY,
         memory::draft_extracted_memory::{DraftExtractedChampionMemory, LaneMemory},
-        strategy_state::StrategyData,
+        strategy_state::{ChampionStrategyState, StrategyData},
     },
 };
 use cambc::{
-    Bitboard, Camp, CampGroup, ChampionDraft, ChampionType, DistanceField, ItemPassive, Team, Vec2,
+    Bitboard, Camp, CampGroup, ChampionDraft, ChampionStats, ChampionType, DistanceField,
+    ItemPassive, Team, Vec2,
 };
 
 pub mod draft_extracted_memory;
@@ -30,9 +32,13 @@ pub struct LaneID(pub usize);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChampionMemory {
+    pub base_champion_stats: Vec<ChampionStats>,
+    pub spawn_distance_field: DistanceField,
+
     pub camp_types: Vec<CampGroupTyped>,
     pub camp_target_order: Vec<Vec<CampInternalID>>,
-    pub camp_distance_fields: Vec<DistanceField>,
+    pub camp_distance_fields: DynamicCacheDistanceFields,
+    pub camp_danager_levels: Vec<f32>,
 
     pub camp_centers: Vec<Vec2>,
     pub altar_positions: Vec<Vec2>,
@@ -51,6 +57,48 @@ pub struct ChampionMemory {
     pub contested_camps: Vec<CampID>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DynamicCacheDistanceFields {
+    camp_distance_fields: Vec<Option<DistanceField>>,
+    camp_centers: Vec<Vec2>,
+    blocked: Bitboard,
+}
+
+impl DynamicCacheDistanceFields {
+    pub fn new(camp_centers: Vec<Vec2>) -> Self {
+        let blocked = cambc::map::walls()
+            .unwrap()
+            .union(cambc::map::holes().unwrap())
+            .unwrap();
+        let n = camp_centers.len();
+        Self {
+            camp_distance_fields: (0..n).map(|_| None).collect(),
+            camp_centers,
+            blocked,
+        }
+    }
+
+    pub fn get(&mut self, camp_id: CampID) -> &DistanceField {
+        let blocked = &self.blocked;
+        let center = self.camp_centers[camp_id.0];
+
+        self.camp_distance_fields[camp_id.0]
+            .get_or_insert_with(|| Self::compute_field(blocked, center))
+    }
+
+    fn compute_field(blocked: &Bitboard, center: Vec2) -> DistanceField {
+        let mut roots = Bitboard::new().unwrap();
+        roots.set(center, true).unwrap();
+
+        let mut visited = Bitboard::new().unwrap();
+        let mut field = DistanceField::new().unwrap();
+        field
+            .compute(blocked, &roots, &mut visited, u16::MAX)
+            .unwrap();
+        field
+    }
+}
+
 impl ChampionMemory {
     pub fn update(&mut self) {
         self.cleared_camps.retain_mut(|(count, _position)| {
@@ -63,12 +111,14 @@ impl ChampionMemory {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChampionState {
     pub champion_type: ChampionType,
+    pub current_strategy: ChampionStrategyState,
+    pub current_health: f32,
     pub lane: Option<LaneID>,
     pub gold_held: Option<i32>,
     pub gems_held: Option<i32>,
     pub active_passives: Option<HashSet<ItemPassive>>,
     pub cooldown_status: Option<[i32; 2]>,
-    pub stat_bonus: Option<[i32; 3]>,
+    pub stat_bonus: Option<[f32; 3]>,
     pub ward_position: Vec2,
 }
 
@@ -76,6 +126,8 @@ impl Default for ChampionState {
     fn default() -> Self {
         Self {
             champion_type: ChampionType::Ren,
+            current_strategy: ChampionStrategyState::Idle,
+            current_health: 0.,
             lane: None,
             gold_held: None,
             gems_held: None,
@@ -103,9 +155,10 @@ impl Lane {
         lane: LaneMemory,
         complete: bool,
         camp_centers: &mut Vec<Vec2>,
+        camp_danager_levels: &mut Vec<f32>,
         altar_positions: &mut Vec<Vec2>,
     ) -> Self {
-        let camps = lane
+        let camps: Vec<CampID> = lane
             .camps
             .into_iter()
             .map(|pos| {
@@ -132,6 +185,8 @@ impl Lane {
                 }
             })
             .collect();
+
+        camp_danager_levels.extend(vec![lane.danger as f32 / camps.len() as f32; camps.len()]);
 
         Self {
             camps,
@@ -182,6 +237,7 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
         let safe_complete: bool = safe_lanes.complete;
 
         let mut camp_centers: Vec<Vec2> = Vec::new();
+        let mut camp_danager_levels: Vec<f32> = Vec::new();
         let mut altar_positions: Vec<Vec2> = Vec::new();
 
         let mut value_lanes: Vec<Lane> = value_lanes
@@ -192,6 +248,7 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
                     lane,
                     value_complete,
                     &mut camp_centers,
+                    &mut camp_danager_levels,
                     &mut altar_positions,
                 )
             })
@@ -201,7 +258,13 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
             .lanes
             .into_iter()
             .map(|lane: LaneMemory| {
-                Lane::from_extracted(lane, safe_complete, &mut camp_centers, &mut altar_positions)
+                Lane::from_extracted(
+                    lane,
+                    safe_complete,
+                    &mut camp_centers,
+                    &mut camp_danager_levels,
+                    &mut altar_positions,
+                )
             })
             .collect();
 
@@ -230,6 +293,11 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
             } else {
                 None
             };
+            let base_champion_stats: Vec<ChampionStats> = cambc::champion_designs()
+                .unwrap()
+                .iter()
+                .map(|champion_design| champion_design.base_stats().unwrap())
+                .collect();
             for &champion_type in champion_types(draft) {
                 if champion_type
                     == cambc::self_champion()
@@ -242,6 +310,8 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
                         champion_type,
                         lane: lane_index.map(LaneID),
                         ward_position: state.ward_location,
+                        current_health: base_champion_stats[champion_type as usize].base_health,
+                        current_strategy: CHAMPION_CHOICE_STRATEGY[champion_type as usize].clone(),
                         ..Default::default()
                     })
                 } else {
@@ -249,6 +319,8 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
                         champion_type,
                         lane: lane_index.map(LaneID),
                         ward_position: state.ward_location,
+                        current_health: base_champion_stats[champion_type as usize].base_health,
+                        current_strategy: CHAMPION_CHOICE_STRATEGY[champion_type as usize].clone(),
                         ..Default::default()
                     });
                 }
@@ -265,21 +337,17 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
             .union(cambc::map::holes().unwrap())
             .unwrap();
 
-        let camp_distance_fields: Vec<DistanceField> = camp_centers
-            .iter()
-            .map(|center: &Vec2| {
-                let mut center_board: Bitboard = Bitboard::new().unwrap();
-                let _ = center_board.set(*center, true);
-                let mut distance: DistanceField = DistanceField::new().unwrap();
-                let _ = distance.compute(
-                    &blocked_bitboard,
-                    &center_board,
-                    &mut Bitboard::new().unwrap(),
-                    u16::MAX,
-                );
-                distance
-            })
-            .collect();
+        let spawn_bitboard: &Bitboard = cambc::map::spawn_region(Team::Ally).unwrap();
+        let mut spawn_distance_field: DistanceField = DistanceField::new().unwrap();
+        let _ = spawn_distance_field.compute(
+            &blocked_bitboard,
+            spawn_bitboard,
+            &mut Bitboard::new().unwrap(),
+            u16::MAX,
+        );
+
+        let camp_distance_fields: DynamicCacheDistanceFields =
+            DynamicCacheDistanceFields::new(camp_centers.clone());
 
         let camp_groups: Vec<CampGroup> = cambc::map::camp_groups().unwrap();
         let n_camp_groups: usize = camp_groups.len();
@@ -303,7 +371,16 @@ impl From<DraftExtractedChampionMemory> for ChampionMemory {
             })
             .collect();
 
+        let base_champion_stats: Vec<ChampionStats> = cambc::champion_designs()
+            .unwrap()
+            .iter()
+            .map(|champion_design| champion_design.base_stats().unwrap())
+            .collect();
+
         Self {
+            base_champion_stats,
+            camp_danager_levels,
+            spawn_distance_field,
             camp_distance_fields,
             camp_target_order,
             camp_types,

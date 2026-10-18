@@ -1,8 +1,11 @@
 use crate::{
     camp::camp::{CampType, CampTypeExtension},
-    champion::memory::{CampID, ChampionMemory},
+    champion::memory::{CampID, ChampionMemory, ChampionState},
 };
-use cambc::{Camp, ChampionState};
+use cambc::{Camp, ChampionType};
+
+pub const DANGER_HP_SCALE: f32 = 1350.;
+pub const DANGER_DMG_SCALE: f32 = 20.;
 
 pub trait CampCombatPredictionExtension {
     fn damage_per_round(&self, camp_id: CampID) -> f32;
@@ -40,9 +43,31 @@ impl CampCombatPredictionExtension for ChampionMemory {
     fn basic_combat_health_delta(&self, camp_id: CampID, champions: &[&ChampionState]) -> f32 {
         let champion_effective_health: f32 = champions
             .iter()
-            .fold(0., |acc, &state: &&ChampionState| acc + state.champion_type);
+            .fold(0., |acc, state: &&ChampionState| acc + state.current_health);
 
-        todo!()
+        let champion_damage_per_round: f32 =
+            champions
+                .iter()
+                .fold(0., |mut acc, state: &&ChampionState| {
+                    let champion_type: ChampionType = state.champion_type;
+                    acc += self.base_champion_stats[champion_type as usize].base_strength
+                        + self.base_champion_stats[champion_type as usize].strength_growth
+                            * state.stat_bonus.map_or(0., |s| s[0]);
+                    acc
+                });
+
+        let camp_damage_per_round: f32 = self.camp_danager_levels[camp_id.0] * DANGER_DMG_SCALE;
+        let mut champion_current_health: f32 = champion_effective_health;
+        let mut camp_current_health: f32 = self.camp_danager_levels[camp_id.0] * DANGER_HP_SCALE;
+
+        let rounds = (champion_current_health / camp_damage_per_round)
+            .ceil()
+            .max((camp_current_health / champion_damage_per_round).ceil());
+
+        champion_current_health -= rounds * camp_damage_per_round;
+        camp_current_health -= rounds * champion_damage_per_round;
+
+        champion_current_health - camp_current_health
     }
 }
 

@@ -7,7 +7,7 @@ pub trait CampTypeExtension {
 impl CampTypeExtension for Camp {
     fn camp_type(&self) -> CampType {
         if self.is_wolf() {
-            CampType::Elk
+            CampType::Wolf
         } else if self.is_gem_cluster() {
             CampType::GemCluster
         } else if self.is_gold_cluster() {

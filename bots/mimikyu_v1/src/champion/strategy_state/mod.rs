@@ -1,11 +1,15 @@
 use crate::champion::{
     champion_preference::CHAMPION_CHOICE_STRATEGY,
-    memory::{CampID, ChampionMemory},
+    memory::{AltarID, CampID, ChampionMemory},
     strategy_state::{
-        farm::FarmStrategy, hunt::HuntStrategy, scout::ScoutStrategy, sneak::SneakStrategy,
+        farm::{FarmAction, FarmStrategy},
+        hunt::HuntStrategy,
+        scout::ScoutStrategy,
+        sneak::SneakStrategy,
     },
 };
 
+pub mod combat;
 pub mod farm;
 pub mod hunt;
 pub mod scout;
@@ -26,7 +30,9 @@ pub enum StrategyData {
     #[default]
     Idle,
     Farm {
+        current_action: FarmAction,
         target_camp: Option<CampID>,
+        target_altar: Option<AltarID>,
     },
     Scout,
     Hunt,

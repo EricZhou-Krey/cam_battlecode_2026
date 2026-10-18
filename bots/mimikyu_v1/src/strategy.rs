@@ -1,7 +1,7 @@
 use crate::{
     champion::{
         memory::{draft_extracted_memory::DraftExtractedChampionMemory, ChampionMemory},
-        strategy_state::ChampionStrategyState,
+        strategy_state::{farm::FarmStrategy, ChampionStrategyState, StrategyState},
     },
     draft::memory::DraftMemory,
 };
@@ -43,10 +43,12 @@ impl Strategy {
                     ChampionMemory::from(DraftExtractedChampionMemory::from_bytes(
                         cambc::draft_memory().bytes().try_into().unwrap(),
                     ));
-                let mut champion_state: ChampionStrategyState =
-                    ChampionStrategyState::new(&champion_memory);
 
-                println!("{:?}", cambc::fuel_remaining());
+                //let mut champion_state: ChampionStrategyState =
+                //    ChampionStrategyState::new(&champion_memory);
+                let mut champion_state: ChampionStrategyState = ChampionStrategyState::Farm;
+                FarmStrategy::init_data(&mut champion_memory);
+
                 loop {
                     //let _ = champion_memory.draw_debug();
                     //let _ = champion_memory.draw_safe_paths();
