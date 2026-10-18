@@ -6,6 +6,20 @@ use crate::draft::{
 use cambc::{ChampionDraft, Team};
 use std::ops::Range;
 
+pub const CHAMPION_PRIORITY: &[ChampionDraft; 11] = &[
+    ChampionDraft::Varg,
+    ChampionDraft::CassiAndIssac,
+    ChampionDraft::Ren,
+    ChampionDraft::Marcella,
+    ChampionDraft::Ryth,
+    ChampionDraft::Vendetta,
+    ChampionDraft::Tavi,
+    ChampionDraft::Stellar,
+    ChampionDraft::Willow,
+    ChampionDraft::VesperVale,
+    ChampionDraft::Prism,
+];
+
 /**
 
 DraftMemory
@@ -171,8 +185,7 @@ impl DraftMemory {
             .copy_from_slice(&Self::generate_contested_camps(&lane_graph, &camp_graph));
 
         let spanning: [u8; 2] = lane_graph.spanning_lane_index(&camp_graph, MAX_LANE_CAMPS);
-        bytes[SPANNING_OFFSET] =
-            ((spanning[0] & 0x7F).min(0x0F) << 4) | (spanning[1] & 0x7F).min(0x0F);
+        bytes[SPANNING_OFFSET] = (spanning[0] << 4) | (spanning[1] & 0x0F);
 
         DraftMemory {
             champion_byte_offset: 0,
@@ -215,24 +228,10 @@ impl DraftMemory {
         bytes
     }
 
-    pub const CHAMPION_PRIORITY: &'static [ChampionDraft; 11] = &[
-        ChampionDraft::Varg,
-        ChampionDraft::CassiAndIssac,
-        ChampionDraft::Ren,
-        ChampionDraft::Marcella,
-        ChampionDraft::Ryth,
-        ChampionDraft::Vendetta,
-        ChampionDraft::Tavi,
-        ChampionDraft::Stellar,
-        ChampionDraft::Willow,
-        ChampionDraft::VesperVale,
-        ChampionDraft::Prism,
-    ];
-
     pub fn pick(&mut self) -> ChampionDraft {
         let index: usize =
-            (cambc::round_number().unwrap() as usize).min(Self::CHAMPION_PRIORITY.len() - 1);
-        Self::CHAMPION_PRIORITY[index]
+            (cambc::round_number().unwrap() as usize).min(CHAMPION_PRIORITY.len() - 1);
+        CHAMPION_PRIORITY[index]
     }
 
     fn find_lane_champion_byte_index_range(lane_index: usize) -> Range<usize> {

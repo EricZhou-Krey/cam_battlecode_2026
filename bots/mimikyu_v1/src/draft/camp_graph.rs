@@ -1,7 +1,5 @@
 use cambc::{Bitboard, CampGroup, DistanceField, Result, Vec2};
 
-const BULK_EXPORT: bool = true;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampGraph {
     pub camp_group_centers: Vec<[u8; 2]>,
@@ -77,7 +75,6 @@ impl CampGraph {
         let tile_index = |position: [u8; 2]| -> usize {
             position[1] as usize * map_width + position[0] as usize
         };
-
         let center_indices: Vec<usize> = camp_group_centers
             .iter()
             .map(|&center: &[u8; 2]| tile_index(center))
@@ -99,26 +96,22 @@ impl CampGraph {
                 &mut Bitboard::new()?,
                 u16::MAX,
             )?;
-            if BULK_EXPORT {
-                distance_field.export_linear_buffer_into(&mut field_buffer)?;
+            distance_field.export_linear_buffer_into(&mut field_buffer)?;
+            if group_index == 0 {
+                debug_assert_eq!(
+                    field_buffer[ally_index],
+                    distance_field.get(Vec2 {
+                        x: ally_spawn_center[0] as i32,
+                        y: ally_spawn_center[1] as i32,
+                    })?,
+                    "linear buffer is not row-major y * width + x"
+                );
             }
-            let lookup = |position: [u8; 2], tile: usize| -> Result<u8> {
-                if BULK_EXPORT {
-                    Ok(saturate(field_buffer[tile]))
-                } else {
-                    distance_field
-                        .get(Vec2 {
-                            x: position[0] as i32,
-                            y: position[1] as i32,
-                        })
-                        .map(saturate)
-                }
-            };
 
             let mut closest_altar_distance: u8 = u8::MAX;
             let mut closest_altar: [u8; 2] = [0, 0];
             for (altar, &altar_index) in altars.iter().zip(altar_indices.iter()) {
-                let distance: u8 = lookup(*altar, altar_index)?;
+                let distance: u8 = saturate(field_buffer[altar_index]);
                 if distance < closest_altar_distance {
                     closest_altar = *altar;
                     closest_altar_distance = distance;
@@ -127,15 +120,16 @@ impl CampGraph {
             closest_altars.push(closest_altar);
 
             camp_group_spawn_distances.push([
-                lookup(ally_spawn_center, ally_index)?,
-                lookup(enemy_spawn_center, enemy_index)?,
+                saturate(field_buffer[ally_index]),
+                saturate(field_buffer[enemy_index]),
             ]);
 
-            let mut row: Vec<u8> = Vec::with_capacity(camp_group_centers.len());
-            for (&center, &center_index) in camp_group_centers.iter().zip(center_indices.iter()) {
-                row.push(lookup(center, center_index)?);
-            }
-            camp_group_distances.push(row);
+            camp_group_distances.push(
+                center_indices
+                    .iter()
+                    .map(|&center_index: &usize| saturate(field_buffer[center_index]))
+                    .collect::<Vec<u8>>(),
+            );
         }
 
         let mut ally_spawn_field: DistanceField = DistanceField::new()?;

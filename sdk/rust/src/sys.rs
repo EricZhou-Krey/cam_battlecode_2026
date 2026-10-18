@@ -463,7 +463,14 @@ unsafe extern "C" {
     #[link_name = "attack"]
     pub(crate) fn attack(target_kind: u32, target_handle: u32) -> i32;
     #[link_name = "cast_with_result"]
-    pub(crate) fn cast(slot: u32, target_kind: u32, target_handle: u32, x: i32, y: i32, out_successful: *mut i32) -> i32;
+    pub(crate) fn cast(
+        slot: u32,
+        target_kind: u32,
+        target_handle: u32,
+        x: i32,
+        y: i32,
+        out_successful: *mut i32,
+    ) -> i32;
     #[link_name = "use_consumable_with_result"]
     pub(crate) fn use_consumable(kind: u32, x: i32, y: i32, out_successful: *mut i32) -> i32;
     #[link_name = "buy_consumable"]
@@ -1131,7 +1138,10 @@ pub(crate) unsafe fn teleports(
 /// Exact C-ABI `teleport_at` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn teleport_at(x: i32, y: i32, out_teleport: *mut TeleportInfo) -> i32 {
-    crate::fake::call("teleport_at", &[x as usize, y as usize, out_teleport as usize]) as i32
+    crate::fake::call(
+        "teleport_at",
+        &[x as usize, y as usize, out_teleport as usize],
+    ) as i32
 }
 /// Exact C-ABI `ward_vision` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1178,7 +1188,14 @@ pub(crate) unsafe fn attack(target_kind: u32, target_handle: u32) -> i32 {
 }
 /// Exact C-ABI `cast` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
-pub(crate) unsafe fn cast(slot: u32, target_kind: u32, target_handle: u32, x: i32, y: i32, out_successful: *mut i32) -> i32 {
+pub(crate) unsafe fn cast(
+    slot: u32,
+    target_kind: u32,
+    target_handle: u32,
+    x: i32,
+    y: i32,
+    out_successful: *mut i32,
+) -> i32 {
     crate::fake::call(
         "cast",
         &[
@@ -1194,7 +1211,15 @@ pub(crate) unsafe fn cast(slot: u32, target_kind: u32, target_handle: u32, x: i3
 /// Exact C-ABI `use_consumable` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn use_consumable(kind: u32, x: i32, y: i32, out_successful: *mut i32) -> i32 {
-    crate::fake::call("use_consumable", &[kind as usize, x as usize, y as usize, out_successful as usize]) as i32
+    crate::fake::call(
+        "use_consumable",
+        &[
+            kind as usize,
+            x as usize,
+            y as usize,
+            out_successful as usize,
+        ],
+    ) as i32
 }
 /// Exact C-ABI `buy_consumable` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1229,12 +1254,18 @@ pub(crate) unsafe fn submit_gems(x: i32, y: i32) -> i32 {
 /// Exact C-ABI `place_ward` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn place_ward(x: i32, y: i32, out_successful: *mut i32) -> i32 {
-    crate::fake::call("place_ward", &[x as usize, y as usize, out_successful as usize]) as i32
+    crate::fake::call(
+        "place_ward",
+        &[x as usize, y as usize, out_successful as usize],
+    ) as i32
 }
 /// Exact C-ABI `move_to` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn move_to(x: i32, y: i32, out_successful: *mut i32) -> i32 {
-    crate::fake::call("move_to", &[x as usize, y as usize, out_successful as usize]) as i32
+    crate::fake::call(
+        "move_to",
+        &[x as usize, y as usize, out_successful as usize],
+    ) as i32
 }
 /// Exact C-ABI `set_priority` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1516,8 +1547,15 @@ pub(crate) unsafe fn map_camp_info(camp: u32, out_info: *mut CampInfo) -> i32 {
 }
 /// Exact C-ABI `map_camp_layout` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
-pub(crate) unsafe fn map_camp_layout(out_words: *mut u32, capacity: u32, out_count: *mut u32) -> i32 {
-    crate::fake::call("map_camp_layout", &[out_words as usize, capacity as usize, out_count as usize]) as i32
+pub(crate) unsafe fn map_camp_layout(
+    out_words: *mut u32,
+    capacity: u32,
+    out_count: *mut u32,
+) -> i32 {
+    crate::fake::call(
+        "map_camp_layout",
+        &[out_words as usize, capacity as usize, out_count as usize],
+    ) as i32
 }
 /// Exact C-ABI `map_camp_group_of` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]

@@ -1,5 +1,8 @@
 use crate::{
-    champion::{debug::MemoryDebug, memory::ChampionMemory},
+    champion::{
+        memory::{draft_extracted_memory::DraftExtractedChampionMemory, ChampionMemory},
+        strategy_state::ChampionStrategyState,
+    },
     draft::memory::DraftMemory,
 };
 use cambc::{ChampionDraft, Result};
@@ -36,10 +39,25 @@ impl Strategy {
                 }
             }
             Self::Champion => {
-                let champion_memory: ChampionMemory =
-                    ChampionMemory::from_bytes(cambc::draft_memory().bytes().try_into().unwrap());
+                let mut champion_memory: ChampionMemory =
+                    ChampionMemory::from(DraftExtractedChampionMemory::from_bytes(
+                        cambc::draft_memory().bytes().try_into().unwrap(),
+                    ));
+                let mut champion_state: ChampionStrategyState =
+                    ChampionStrategyState::new(&champion_memory);
+
+                println!("{:?}", cambc::fuel_remaining());
                 loop {
-                    let _ = champion_memory.draw_debug();
+                    //let _ = champion_memory.draw_debug();
+                    //let _ = champion_memory.draw_safe_paths();
+                    //let _ = champion_memory.draw_value_paths();
+                    //let _ = champion_memory.draw_contested_camps();
+                    //let _ = champion_memory.draw_initial_champions();
+
+                    champion_memory.update();
+                    champion_state.resolve_state(&mut champion_memory);
+                    champion_state.turn(&mut champion_memory);
+
                     cambc::end_turn();
                 }
             }

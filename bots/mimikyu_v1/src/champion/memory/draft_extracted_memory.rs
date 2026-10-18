@@ -3,11 +3,19 @@ use cambc::{ChampionDraft, Vec2};
 use crate::draft::{
     lane::{MAX_LANE_CAMPS, NOT_SPANNING_FLAG},
     memory::{
-        DraftMemory, CHAMPION_STATES, CHAMPION_STATE_BYTES, CONTESTED_BYTES, CONTESTED_OFFSET,
-        DRAFT_MEMORY_BYTES, LANES_OFFSET, LANE_CHAMPION_BYTE_OFFSET, LANE_SLOTS, SAFE_LANE_BYTES,
-        SAFE_OFFSET, SPANNING_OFFSET, VALUE_LANE_BYTES,
+        CHAMPION_PRIORITY, CHAMPION_STATES, CHAMPION_STATE_BYTES, CONTESTED_BYTES,
+        CONTESTED_OFFSET, DRAFT_MEMORY_BYTES, LANES_OFFSET, LANE_CHAMPION_BYTE_OFFSET, LANE_SLOTS,
+        SAFE_LANE_BYTES, SAFE_OFFSET, SPANNING_OFFSET, VALUE_LANE_BYTES,
     },
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftExtractedChampionMemory {
+    pub champion_states: Vec<InitialChampionState>,
+    pub value_lanes: LaneSet,
+    pub safe_lanes: LaneSet,
+    pub contested_camps: [Vec2; CONTESTED_CAMPS],
+}
 
 const POINT_BYTES: usize = 2;
 const LANE_POINTS_BYTES: usize = MAX_LANE_CAMPS * POINT_BYTES;
@@ -32,7 +40,7 @@ pub struct InitialChampionState {
 
 impl InitialChampionState {
     pub fn champion_draft(&self) -> Option<ChampionDraft> {
-        DraftMemory::CHAMPION_PRIORITY
+        CHAMPION_PRIORITY
             .iter()
             .copied()
             .find(|champion: &ChampionDraft| ((*champion as u8) & 0xF) == self.champion_index)
@@ -75,14 +83,6 @@ impl LaneMemory {
 pub struct LaneSet {
     pub lanes: Vec<LaneMemory>,
     pub complete: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChampionMemory {
-    pub initial_states: Vec<InitialChampionState>,
-    pub value_lanes: LaneSet,
-    pub safe_lanes: LaneSet,
-    pub contested_camps: [Vec2; CONTESTED_CAMPS],
 }
 
 fn read_points(slice: &[u8], count: usize) -> Vec<Vec2> {
@@ -129,24 +129,26 @@ fn parse_lane_set(
     offset: usize,
     lane_bytes: usize,
     is_value: bool,
-    spanning_byte: u8,
+    spanning_nibble: u8,
 ) -> LaneSet {
-    let lane_count: usize = ((spanning_byte & !NOT_SPANNING_FLAG) as usize).min(LANE_SLOTS);
+    let complete: bool = spanning_nibble != NOT_SPANNING_FLAG;
+    let lane_count: usize = if complete {
+        (spanning_nibble as usize).min(LANE_SLOTS)
+    } else {
+        0
+    };
     let lanes: Vec<LaneMemory> = (0..lane_count)
         .map(|lane_index: usize| {
             let start: usize = offset + lane_index * lane_bytes;
             parse_lane(&bytes[start..start + lane_bytes], is_value)
         })
         .collect();
-    LaneSet {
-        lanes,
-        complete: spanning_byte & NOT_SPANNING_FLAG == 0,
-    }
+    LaneSet { lanes, complete }
 }
 
-impl ChampionMemory {
+impl DraftExtractedChampionMemory {
     pub fn from_bytes(bytes: &[u8; DRAFT_MEMORY_BYTES]) -> Self {
-        let initial_states: Vec<InitialChampionState> = (0..CHAMPION_STATES)
+        let champion_states: Vec<InitialChampionState> = (0..CHAMPION_STATES)
             .filter_map(|state_index: usize| {
                 let start: usize = state_index * CHAMPION_STATE_BYTES;
                 let state: &[u8] = &bytes[start..start + CHAMPION_STATE_BYTES];
@@ -172,7 +174,7 @@ impl ChampionMemory {
         let safe_count: u8 = spanning_byte & 0x0F;
 
         Self {
-            initial_states,
+            champion_states,
             value_lanes: parse_lane_set(bytes, LANES_OFFSET, VALUE_LANE_BYTES, true, value_count),
             safe_lanes: parse_lane_set(bytes, SAFE_OFFSET, SAFE_LANE_BYTES, false, safe_count),
             contested_camps,
