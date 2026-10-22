@@ -307,6 +307,8 @@ pub(crate) struct WardInfo {
     pub timer: i32,
     /// Whether this ward is disabled.
     pub disabled: u8,
+    /// Owning champion handle captured while the ward is visible.
+    pub owner: u32,
 }
 /// Engine control-ward observation record; does not imply an action-target handle.
 #[repr(C)]
@@ -425,6 +427,10 @@ unsafe extern "C" {
     pub(crate) fn enemy_occupancy(out_board: *mut u64) -> i32;
     #[link_name = "board_camp_occupancy"]
     pub(crate) fn camp_occupancy(out_board: *mut u64) -> i32;
+    #[link_name = "board_awake_camp_occupancy"]
+    pub(crate) fn awake_camp_occupancy(out_board: *mut u64) -> i32;
+    #[link_name = "board_asleep_camp_occupancy"]
+    pub(crate) fn asleep_camp_occupancy(out_board: *mut u64) -> i32;
     #[link_name = "board_ally_ward_occupancy"]
     pub(crate) fn ally_ward_occupancy(out_board: *mut u64) -> i32;
     #[link_name = "board_enemy_ward_occupancy"]
@@ -463,14 +469,7 @@ unsafe extern "C" {
     #[link_name = "attack"]
     pub(crate) fn attack(target_kind: u32, target_handle: u32) -> i32;
     #[link_name = "cast_with_result"]
-    pub(crate) fn cast(
-        slot: u32,
-        target_kind: u32,
-        target_handle: u32,
-        x: i32,
-        y: i32,
-        out_successful: *mut i32,
-    ) -> i32;
+    pub(crate) fn cast(slot: u32, target_kind: u32, target_handle: u32, x: i32, y: i32, out_successful: *mut i32) -> i32;
     #[link_name = "use_consumable_with_result"]
     pub(crate) fn use_consumable(kind: u32, x: i32, y: i32, out_successful: *mut i32) -> i32;
     #[link_name = "buy_consumable"]
@@ -633,6 +632,9 @@ unsafe extern "C" {
     /// Exact C-ABI `champion_at` host operation; pointer buffers obey the module safety contract.
     #[link_name = "champion_at"]
     pub(crate) fn champion_at(x: i32, y: i32, out_handle: *mut u32) -> i32;
+    /// Query one tile in the authenticated champion's effective vision.
+    #[link_name = "is_visible"]
+    pub(crate) fn is_visible(x: i32, y: i32, out_visible: *mut i32) -> i32;
     /// Exact C-ABI `has_camp` host operation; pointer buffers obey the module safety contract.
     #[link_name = "has_camp"]
     pub(crate) fn has_camp(x: i32, y: i32, out_present: *mut i32) -> i32;
@@ -873,6 +875,12 @@ unsafe extern "C" {
     /// Exact C-ABI `DistanceField_Set` host operation; pointer buffers obey the module safety contract.
     #[link_name = "bc_DistanceField_Set"]
     pub(crate) fn DistanceField_Set(field: *mut u16, x: i32, y: i32, distance: u16) -> i32;
+    /// Copy complete distance storage into an existing field.
+    #[link_name = "bc_DistanceField_Copy"]
+    pub(crate) fn DistanceField_Copy(source: *const u16, destination: *mut u16) -> i32;
+    /// Copy mask-selected logical distances into an existing field.
+    #[link_name = "bc_DistanceField_CopyWithMask"]
+    pub(crate) fn DistanceField_CopyWithMask(source: *const u16, mask: *const u64, destination: *mut u16) -> i32;
     /// Exact C-ABI `DistanceField_ComputeWithExpansionCount` host operation; pointer buffers obey the module safety contract.
     #[link_name = "bc_DistanceField_ComputeWithExpansionCount"]
     pub(crate) fn DistanceField_ComputeWithExpansionCount(
@@ -1074,6 +1082,16 @@ pub(crate) unsafe fn enemy_occupancy(out_board: *mut u64) -> i32 {
 pub(crate) unsafe fn camp_occupancy(out_board: *mut u64) -> i32 {
     crate::fake::call("board_camp_occupancy", &[out_board as usize]) as i32
 }
+/// Exact C-ABI `awake_camp_occupancy` host operation; pointer buffers obey the module safety contract.
+#[cfg(test)]
+pub(crate) unsafe fn awake_camp_occupancy(out_board: *mut u64) -> i32 {
+    crate::fake::call("board_awake_camp_occupancy", &[out_board as usize]) as i32
+}
+/// Exact C-ABI `asleep_camp_occupancy` host operation; pointer buffers obey the module safety contract.
+#[cfg(test)]
+pub(crate) unsafe fn asleep_camp_occupancy(out_board: *mut u64) -> i32 {
+    crate::fake::call("board_asleep_camp_occupancy", &[out_board as usize]) as i32
+}
 /// Exact C-ABI `ally_ward_occupancy` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn ally_ward_occupancy(out_board: *mut u64) -> i32 {
@@ -1138,10 +1156,7 @@ pub(crate) unsafe fn teleports(
 /// Exact C-ABI `teleport_at` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn teleport_at(x: i32, y: i32, out_teleport: *mut TeleportInfo) -> i32 {
-    crate::fake::call(
-        "teleport_at",
-        &[x as usize, y as usize, out_teleport as usize],
-    ) as i32
+    crate::fake::call("teleport_at", &[x as usize, y as usize, out_teleport as usize]) as i32
 }
 /// Exact C-ABI `ward_vision` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1188,14 +1203,7 @@ pub(crate) unsafe fn attack(target_kind: u32, target_handle: u32) -> i32 {
 }
 /// Exact C-ABI `cast` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
-pub(crate) unsafe fn cast(
-    slot: u32,
-    target_kind: u32,
-    target_handle: u32,
-    x: i32,
-    y: i32,
-    out_successful: *mut i32,
-) -> i32 {
+pub(crate) unsafe fn cast(slot: u32, target_kind: u32, target_handle: u32, x: i32, y: i32, out_successful: *mut i32) -> i32 {
     crate::fake::call(
         "cast",
         &[
@@ -1211,15 +1219,7 @@ pub(crate) unsafe fn cast(
 /// Exact C-ABI `use_consumable` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn use_consumable(kind: u32, x: i32, y: i32, out_successful: *mut i32) -> i32 {
-    crate::fake::call(
-        "use_consumable",
-        &[
-            kind as usize,
-            x as usize,
-            y as usize,
-            out_successful as usize,
-        ],
-    ) as i32
+    crate::fake::call("use_consumable", &[kind as usize, x as usize, y as usize, out_successful as usize]) as i32
 }
 /// Exact C-ABI `buy_consumable` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1254,18 +1254,12 @@ pub(crate) unsafe fn submit_gems(x: i32, y: i32) -> i32 {
 /// Exact C-ABI `place_ward` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn place_ward(x: i32, y: i32, out_successful: *mut i32) -> i32 {
-    crate::fake::call(
-        "place_ward",
-        &[x as usize, y as usize, out_successful as usize],
-    ) as i32
+    crate::fake::call("place_ward", &[x as usize, y as usize, out_successful as usize]) as i32
 }
 /// Exact C-ABI `move_to` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
 pub(crate) unsafe fn move_to(x: i32, y: i32, out_successful: *mut i32) -> i32 {
-    crate::fake::call(
-        "move_to",
-        &[x as usize, y as usize, out_successful as usize],
-    ) as i32
+    crate::fake::call("move_to", &[x as usize, y as usize, out_successful as usize]) as i32
 }
 /// Exact C-ABI `set_priority` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1547,15 +1541,8 @@ pub(crate) unsafe fn map_camp_info(camp: u32, out_info: *mut CampInfo) -> i32 {
 }
 /// Exact C-ABI `map_camp_layout` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
-pub(crate) unsafe fn map_camp_layout(
-    out_words: *mut u32,
-    capacity: u32,
-    out_count: *mut u32,
-) -> i32 {
-    crate::fake::call(
-        "map_camp_layout",
-        &[out_words as usize, capacity as usize, out_count as usize],
-    ) as i32
+pub(crate) unsafe fn map_camp_layout(out_words: *mut u32, capacity: u32, out_count: *mut u32) -> i32 {
+    crate::fake::call("map_camp_layout", &[out_words as usize, capacity as usize, out_count as usize]) as i32
 }
 /// Exact C-ABI `map_camp_group_of` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -1633,6 +1620,11 @@ pub(crate) unsafe fn champion_at(x: i32, y: i32, out_handle: *mut u32) -> i32 {
         "champion_at",
         &[x as usize, y as usize, out_handle as usize],
     ) as i32
+}
+/// Test host equivalent of the scalar visibility query.
+#[cfg(test)]
+pub(crate) unsafe fn is_visible(x: i32, y: i32, out_visible: *mut i32) -> i32 {
+    crate::fake::call("is_visible", &[x as usize, y as usize, out_visible as usize]) as i32
 }
 /// Exact C-ABI `has_camp` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
@@ -2141,6 +2133,14 @@ pub(crate) unsafe fn DistanceField_Set(field: *mut u16, x: i32, y: i32, distance
         "bc_DistanceField_Set",
         &[field as usize, x as usize, y as usize, distance as usize],
     ) as i32
+}
+#[cfg(test)]
+pub(crate) unsafe fn DistanceField_Copy(source: *const u16, destination: *mut u16) -> i32 {
+    crate::fake::call("bc_DistanceField_Copy", &[source as usize, destination as usize]) as i32
+}
+#[cfg(test)]
+pub(crate) unsafe fn DistanceField_CopyWithMask(source: *const u16, mask: *const u64, destination: *mut u16) -> i32 {
+    crate::fake::call("bc_DistanceField_CopyWithMask", &[source as usize, mask as usize, destination as usize]) as i32
 }
 /// Exact C-ABI `DistanceField_ComputeWithExpansionCount` host operation; pointer buffers obey the module safety contract.
 #[cfg(test)]
