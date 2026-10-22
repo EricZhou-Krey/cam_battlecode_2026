@@ -1,5 +1,5 @@
-use crate::sdk_interact::{self, ChampionUnwrapperExtension};
-use cambc::{ChampionDraft, ChampionType, Result};
+use crate::draft::draft_memory::{DraftMemory, DraftMemoryBlock};
+use cambc::{ChampionDraft, ChampionType};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Strategy {
@@ -12,25 +12,31 @@ impl Strategy {
         if cambc::is_draft() {
             Self::Draft
         } else {
-            Self::Champion(sdk_interact::me().champion_type())
+            Self::Champion(
+                cambc::self_champion()
+                    .unwrap()
+                    .unwrap()
+                    .champion_name()
+                    .unwrap(),
+            )
         }
     }
 
     pub fn enter(&self) {
         match self {
             Self::Draft => {
-                let mut draft_memory: DraftMemory = DraftMemory::new();
+                let draft_memory: DraftMemory = DraftMemory::new();
+                let _ = cambc::draft_memory().submit(&draft_memory.as_bytes());
+
                 loop {
                     let pick: ChampionDraft = draft_memory.pick();
-                    draft_memory.update(&pick);
-                    if sdk_interact::round_number() + 1 == sdk_interact::team_size() as u32 {
-                        let _ = cambc::draft_memory().submit(&draft_memory.bytes);
-                    }
                     let _ = cambc::draft::pick(pick);
                     cambc::end_turn();
                 }
             }
             Self::Champion(champion_type) => {
+                println!("{:?}", cambc::draft_memory());
+                /*
                 let mut champion_memory: ChampionMemory =
                     ChampionMemory::from(DraftExtractedChampionMemory::from_bytes(
                         cambc::draft_memory().bytes().try_into().unwrap(),
@@ -45,6 +51,10 @@ impl Strategy {
                     champion_state.resolve_state(&mut champion_memory);
                     champion_state.turn(&mut champion_memory);
 
+                    cambc::end_turn();
+                }
+                */
+                loop {
                     cambc::end_turn();
                 }
             }

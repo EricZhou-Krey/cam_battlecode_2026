@@ -1,4 +1,4 @@
-use cambc::{Bitboard, CampGroup, Champion, DistanceField, Team, Vec2};
+use cambc::{Bitboard, Champion, DistanceField, Vec2};
 
 pub fn step_with_fallback(me: &Champion, field: &DistanceField, goal: Vec2) -> bool {
     let pos = me.position().unwrap();
