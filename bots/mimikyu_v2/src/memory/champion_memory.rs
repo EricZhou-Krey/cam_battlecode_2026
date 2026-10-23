@@ -25,5 +25,8 @@ impl ChampionMemory {
 
     pub fn turn(&mut self) {
         //TODO
+
+        self.map.distance_fields.lazy_discover_from_queue();
+        self.message_board.sync();
     }
 }

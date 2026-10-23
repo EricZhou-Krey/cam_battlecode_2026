@@ -8,11 +8,11 @@ use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LazyDistanceFields {
-    camp_group_discovery_queue: VecDeque<CampGroupID>,
-    camp_group_distance_fields: Vec<Option<DistanceField>>,
-    altar_distance_field: Option<DistanceField>,
-    discovered_this_round: bool,
-    blocked_bitboard: Bitboard,
+    pub camp_group_discovery_queue: VecDeque<CampGroupID>,
+    pub camp_group_distance_fields: Vec<Option<DistanceField>>,
+    pub altar_distance_field: Option<DistanceField>,
+    pub discovered_this_round: bool,
+    pub blocked_bitboard: Bitboard,
 }
 
 impl LazyDistanceFields {
