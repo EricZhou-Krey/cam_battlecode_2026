@@ -1,5 +1,9 @@
 use cambc::{Bitboard, Champion, DistanceField, Vec2};
 
+pub fn chebyshev_distance(first: Vec2, second: Vec2) -> i32 {
+    (first.x - second.x).abs().max((first.y - second.y).abs())
+}
+
 pub fn step_with_fallback(me: &Champion, field: &DistanceField, goal: Vec2) -> bool {
     let pos = me.position().unwrap();
 

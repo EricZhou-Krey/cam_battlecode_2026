@@ -1,5 +1,6 @@
-use crate::draft::draft_memory::DraftMemoryBlock;
+use crate::{draft::draft_memory::DraftMemoryBlock, sdk_interact::map::chebyshev_distance};
 use cambc::{Bitboard, DistanceField, Team, Vec2};
+use std::collections::HashMap;
 
 pub const MAX_SHORTCUTS: usize = 64;
 
@@ -72,10 +73,6 @@ fn crossing_starts(
             .unwrap();
     }
     starts.positions().unwrap()
-}
-
-fn chebyshev_distance(first: Vec2, second: Vec2) -> i32 {
-    (first.x - second.x).abs().max((first.y - second.y).abs())
 }
 
 fn apply_gain(candidate: &mut ShortcutCandidate, from_distance: u16, to_distance: u16) {
@@ -220,6 +217,24 @@ impl ShortcutDraftBlock {
             shortcuts,
             shortcut_count,
         }
+    }
+
+    pub fn decoded_shortcuts(&self) -> HashMap<Vec2, Vec2> {
+        self.shortcuts
+            .iter()
+            .take(self.shortcut_count as usize)
+            .flat_map(|entry: &[u8; 3]| {
+                let from: Vec2 = Vec2 {
+                    x: entry[0] as i32,
+                    y: entry[1] as i32,
+                };
+                let to: Vec2 = Vec2 {
+                    x: from.x + (entry[2] >> 4) as i32 - OFFSET_BIAS,
+                    y: from.y + (entry[2] & 0x0F) as i32 - OFFSET_BIAS,
+                };
+                [(from, to), (to, from)]
+            })
+            .collect()
     }
 }
 

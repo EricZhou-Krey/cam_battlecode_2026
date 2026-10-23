@@ -150,7 +150,7 @@ fn draw_control_points(memory: &DraftMemory) {
         .count();
 
     println!("== CONTROL POINTS ==");
-    println!("Control points are tiles the bot wants to hold. Empty slots are stored as [0, 0] and are skipped here.");
+    println!("Control points are points used as meeting points or callouts. Empty slots are stored as [0, 0] and are skipped here.");
     println!("On the map: each control point is an orange dot. Columns: slot, tile.");
     if used_count == 0 {
         println!(
