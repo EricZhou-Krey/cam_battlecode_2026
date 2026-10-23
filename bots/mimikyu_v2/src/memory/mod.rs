@@ -1,6 +1,6 @@
 pub mod champion_memory;
 pub mod champion_states;
-pub mod map_cache;
+pub mod lazy_map;
 pub mod message;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
