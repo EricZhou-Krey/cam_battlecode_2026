@@ -1,10 +1,16 @@
-use crate::draft::draft_memory::{DraftMemory, DraftMemoryBlock};
-use cambc::{ChampionDraft, ChampionType};
+use crate::{
+    draft::{
+        debug::debug_draft,
+        draft_memory::{DraftMemory, DraftMemoryBlock},
+    },
+    memory::champion_memory::ChampionMemory,
+};
+use cambc::ChampionDraft;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Strategy {
     Draft,
-    Champion(ChampionType),
+    Champion,
 }
 
 impl Strategy {
@@ -12,13 +18,7 @@ impl Strategy {
         if cambc::is_draft() {
             Self::Draft
         } else {
-            Self::Champion(
-                cambc::self_champion()
-                    .unwrap()
-                    .unwrap()
-                    .champion_name()
-                    .unwrap(),
-            )
+            Self::Champion
         }
     }
 
@@ -27,6 +27,7 @@ impl Strategy {
             Self::Draft => {
                 let draft_memory: DraftMemory = DraftMemory::new();
                 let _ = cambc::draft_memory().submit(&draft_memory.as_bytes());
+                debug_draft(&draft_memory);
 
                 loop {
                     let pick: ChampionDraft = draft_memory.pick();
@@ -34,27 +35,12 @@ impl Strategy {
                     cambc::end_turn();
                 }
             }
-            Self::Champion(champion_type) => {
-                println!("{:?}", cambc::draft_memory());
-                /*
-                let mut champion_memory: ChampionMemory =
-                    ChampionMemory::from(DraftExtractedChampionMemory::from_bytes(
-                        cambc::draft_memory().bytes().try_into().unwrap(),
-                    ));
-
-                let mut champion_state: ChampionStrategyState =
-                    ChampionStrategyState::new(&champion_memory);
-                champion_state.init(&mut champion_memory);
-
+            Self::Champion => {
+                let mut champion_memory: ChampionMemory = ChampionMemory::from_draft_bytes(
+                    cambc::draft_memory().bytes().try_into().unwrap(),
+                );
                 loop {
-                    champion_memory.update();
-                    champion_state.resolve_state(&mut champion_memory);
-                    champion_state.turn(&mut champion_memory);
-
-                    cambc::end_turn();
-                }
-                */
-                loop {
+                    champion_memory.turn();
                     cambc::end_turn();
                 }
             }

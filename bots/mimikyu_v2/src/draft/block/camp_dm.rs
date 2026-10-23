@@ -1,5 +1,5 @@
-use crate::draft::draft_memory::DraftMemoryBlock;
-use cambc::{Bitboard, Camp, CampGroup, CampStats, CampType, DistanceField, Team, Vec2};
+use crate::{draft::draft_memory::DraftMemoryBlock, sdk_interact::map::Center};
+use cambc::{Bitboard, Camp, CampGroup, CampStats, CampType, Team};
 
 pub const MAX_CAMP_GROUPS: usize = 64;
 
@@ -16,6 +16,12 @@ pub const CAMP_DRAFT_BYTE_SIZE: usize = DISCOVERY_ORDER_BYTE_SIZE
     + GOLD_VALUE_BYTE_SIZE
     + COUNT_BYTE_SIZE;
 
+fn center_distance_squared(first: [u8; 2], second: [u8; 2]) -> u32 {
+    let delta_x: i32 = first[0] as i32 - second[0] as i32;
+    let delta_y: i32 = first[1] as i32 - second[1] as i32;
+    (delta_x * delta_x + delta_y * delta_y) as u32
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampDraftBlock {
     pub camp_group_discovery_order: [u8; MAX_CAMP_GROUPS],
@@ -26,18 +32,22 @@ pub struct CampDraftBlock {
     pub camp_group_count: u8,
 }
 
+impl Default for CampDraftBlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CampDraftBlock {
-    pub fn new(
-        camp_group_distance_fields: &mut [DistanceField; MAX_CAMP_GROUPS],
-        blocked_bitboard: &Bitboard,
-    ) -> Self {
+    pub fn new() -> Self {
         let camp_groups: Vec<CampGroup> = cambc::map::camp_groups().unwrap();
         let camp_group_count: usize = camp_groups.len();
         let spawn_bitboard: &Bitboard = cambc::map::spawn_region(Team::Ally).unwrap();
+        let spawn_center: [u8; 2] = spawn_bitboard.center();
 
         let n_camp_group_count: usize = camp_group_count.min(MAX_CAMP_GROUPS);
 
-        let mut camp_group_distance_indexed: Vec<(u16, usize)> =
+        let mut camp_group_distance_indexed: Vec<(u32, usize)> =
             Vec::with_capacity(n_camp_group_count);
         let mut camp_group_effective_hp: [u16; MAX_CAMP_GROUPS] = [0; MAX_CAMP_GROUPS];
         let mut camp_group_damage_per_round: [u8; MAX_CAMP_GROUPS] = [0; MAX_CAMP_GROUPS];
@@ -46,29 +56,12 @@ impl CampDraftBlock {
 
         for camp_id in 0..n_camp_group_count {
             let camp_group_tiles: Bitboard = camp_groups[camp_id].spawn_tiles().unwrap();
-            camp_group_distance_fields[camp_id]
-                .compute_to(
-                    blocked_bitboard,
-                    spawn_bitboard,
-                    &camp_group_tiles,
-                    &mut Bitboard::new().unwrap(),
-                    u16::MAX,
-                )
-                .unwrap();
+            let camp_group_center: [u8; 2] = camp_group_tiles.center();
 
-            let distance_to_camp_group: u16 = spawn_bitboard.positions().unwrap().iter().fold(
-                u16::MAX,
-                |acc, position: &Vec2| {
-                    let distance: u16 = camp_group_distance_fields[camp_id].get(*position).unwrap();
-                    if acc < distance {
-                        acc
-                    } else {
-                        distance
-                    }
-                },
-            );
-
-            camp_group_distance_indexed.push((distance_to_camp_group, camp_id));
+            camp_group_distance_indexed.push((
+                center_distance_squared(spawn_center, camp_group_center),
+                camp_id,
+            ));
 
             let camps: &[Camp] = camp_groups[camp_id].camps();
 
@@ -78,9 +71,9 @@ impl CampDraftBlock {
             let gold_value: u16 = camp_groups[camp_id].gold_value() as u16;
 
             for camp in camps {
-                let camp_stats: CampStats = camp.base_stats().unwrap();
                 match camp.kind() {
                     CampType::Wolf | CampType::Elk | CampType::Monolith | CampType::Golem => {
+                        let camp_stats: CampStats = camp.base_stats().unwrap();
                         effective_hp += camp_stats.base_health as u16;
                         damage_per_round += camp_stats.base_strength as u8;
                     }
@@ -117,7 +110,9 @@ fn to_bytes_u8(bytes_u16: &[u16]) -> Vec<u8> {
 
 fn to_bytes_u16(bytes_u8: &[u8]) -> Vec<u16> {
     bytes_u8
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect()
 }

@@ -1,5 +1,5 @@
 use crate::draft::block::{
-    camp_dm::{CampDraftBlock, CAMP_DRAFT_BYTE_SIZE, MAX_CAMP_GROUPS},
+    camp_dm::{CampDraftBlock, CAMP_DRAFT_BYTE_SIZE},
     control_point_dm::{ControlPointDraftBlock, CONTROL_POINT_DRAFT_SIZE},
     shortcut_map_dm::{ShortcutDraftBlock, SHORTCUT_DRAFT_BYTE_SIZE},
 };
@@ -36,20 +36,15 @@ impl DraftMemory {
             .unwrap()
             .union(cambc::map::altars().unwrap())
             .unwrap();
-        let mut camp_group_distance_fields: [DistanceField; MAX_CAMP_GROUPS] =
-            std::array::from_fn(|_| DistanceField::new().unwrap());
+
         let mut altar_distance_field: DistanceField = DistanceField::new().unwrap();
 
-        let camp_memory: CampDraftBlock =
-            CampDraftBlock::new(&mut camp_group_distance_fields, &blocked_bitboard);
-        let shortcut_memory: ShortcutDraftBlock = ShortcutDraftBlock::new(
-            &camp_group_distance_fields,
-            camp_memory.camp_group_count as usize,
-            &mut altar_distance_field,
-            &blocked_bitboard,
-        );
-        let control_point_memory: ControlPointDraftBlock =
-            ControlPointDraftBlock::new(&camp_group_distance_fields, &altar_distance_field);
+        let camp_memory: CampDraftBlock = CampDraftBlock::new();
+
+        let shortcut_memory: ShortcutDraftBlock =
+            ShortcutDraftBlock::new(&mut altar_distance_field, &blocked_bitboard);
+
+        let control_point_memory: ControlPointDraftBlock = ControlPointDraftBlock::new();
 
         Self {
             camp_memory,
