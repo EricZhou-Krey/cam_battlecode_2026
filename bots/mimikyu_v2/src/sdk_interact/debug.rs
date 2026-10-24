@@ -531,7 +531,6 @@ pub fn draw_sent_messages(memory: &ChampionMemory) {
                 Message::CombatHeal {
                     location_id,
                     signal_strength,
-                    acknowlegement: _,
                 } => {
                     draw_circle(
                         memory.map.points_of_interest.locate(*location_id),
