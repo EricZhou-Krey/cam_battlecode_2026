@@ -1,7 +1,7 @@
 use crate::{
+    action::Action,
     draft::draft_memory::{DraftMemory, DraftMemoryBlock},
     memory::champion_memory::ChampionMemory,
-    sdk_interact::debug::print_distance_fields,
 };
 use cambc::ChampionDraft;
 
@@ -37,10 +37,25 @@ impl Strategy {
                 let mut champion_memory: ChampionMemory = ChampionMemory::from_draft_bytes(
                     cambc::draft_memory().bytes().try_into().unwrap(),
                 );
+                let mut current_action: Action = Action::Idle;
                 loop {
+                    champion_memory.map.distance_fields.reset_discovered_state();
+                    champion_memory.map.tick_camp_group_respawn_timers();
+                    champion_memory.message_board.sync();
+
+                    champion_memory.update_by_status_messgges();
+
+                    current_action.turn(&mut champion_memory);
+
+                    champion_memory
+                        .map
+                        .distance_fields
+                        .lazy_discover_from_queue();
+                    champion_memory.message_board.flush();
+
                     // debug_champion_turn(&champion_memory);
-                    champion_memory.turn();
-                    print_distance_fields(&champion_memory);
+                    // debug_current_action(&current_action, &champion_memory);
+
                     cambc::end_turn();
                 }
             }

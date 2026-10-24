@@ -179,6 +179,7 @@ pub struct LazyMap {
     pub distance_fields: LazyDistanceFields,
 
     // Indexed by CampGroupID.0
+    pub camp_group_reset_timer: Vec<i32>,
     pub camp_group_respawn_timer: Vec<i32>,
     pub camp_group_effective_hp: Vec<f32>,
     pub camp_group_damage_per_round: Vec<f32>,
@@ -205,6 +206,12 @@ impl LazyMap {
             })
             .collect();
         let distance_fields: LazyDistanceFields = LazyDistanceFields::new(draft_memory);
+        let camp_group_reset_timer: Vec<i32> = cambc::map::camp_groups()
+            .unwrap()
+            .into_iter()
+            .take(camp_group_count)
+            .map(|camp_group| camp_group.max_respawn_timer())
+            .collect();
         let camp_group_respawn_timer: Vec<i32> = vec![0; camp_group_count];
         let camp_group_effective_hp: Vec<f32> = draft_memory
             .camp_memory
@@ -267,6 +274,7 @@ impl LazyMap {
         Self {
             distance_fields,
 
+            camp_group_reset_timer,
             camp_group_respawn_timer,
             camp_group_effective_hp,
             camp_group_damage_per_round,
@@ -275,6 +283,17 @@ impl LazyMap {
             camp_group_count,
 
             points_of_interest,
+        }
+    }
+
+    pub fn start_camp_group_respawn_timer(&mut self, camp_group_id: CampGroupID) {
+        self.camp_group_respawn_timer[camp_group_id.0] =
+            self.camp_group_reset_timer[camp_group_id.0];
+    }
+
+    pub fn tick_camp_group_respawn_timers(&mut self) {
+        for respawn_timer in &mut self.camp_group_respawn_timer {
+            *respawn_timer = (*respawn_timer - 1).max(0);
         }
     }
 }

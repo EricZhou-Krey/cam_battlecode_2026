@@ -12,7 +12,7 @@ pub const DRAFT_PICKS: &[ChampionDraft; 5] = &[
     ChampionDraft::HeartOfRuin,
     ChampionDraft::Prism,
     ChampionDraft::VesperVale,
-    ChampionDraft::Marcella,
+    ChampionDraft::CassiAndIssac,
 ];
 
 #[derive(Debug, Clone, PartialEq)]

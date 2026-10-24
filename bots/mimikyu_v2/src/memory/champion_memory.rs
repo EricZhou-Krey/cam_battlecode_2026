@@ -1,7 +1,9 @@
 use crate::{
     draft::draft_memory::{DraftMemory, DraftMemoryBlock, DRAFT_MEMORY_BYTE_SIZE},
     memory::{
-        champion_info::AllChampionInfo, lazy_map::LazyMap, message::message_board::MessageBoard,
+        champion_info::AllChampionInfo,
+        lazy_map::LazyMap,
+        message::{message_board::MessageBoard, messages::Message},
     },
 };
 
@@ -23,11 +25,79 @@ impl ChampionMemory {
         }
     }
 
-    pub fn turn(&mut self) {
-        //TODO
+    pub fn update_by_status_messgges(&mut self) {
+        for received_message in &self.message_board.inbox {
+            match received_message.message {
+                Message::StatusAllyHealth {
+                    ally_champion_id,
+                    current_health_in_hundreds,
+                } => {
+                    self.champion_info
+                        .ally
+                        .entry(ally_champion_id)
+                        .and_modify(|champion_info| {
+                            champion_info.current_hp =
+                                Some(current_health_in_hundreds as f32 * 100.)
+                        });
+                }
+                Message::StatusEnemyHealth {
+                    enemy_champion_id,
+                    current_health_in_hundreds,
+                } => {
+                    self.champion_info
+                        .enemy
+                        .entry(enemy_champion_id)
+                        .and_modify(|champion_info| {
+                            champion_info.current_hp =
+                                Some(current_health_in_hundreds as f32 * 100.)
+                        });
+                }
+                Message::StatusAllyLocation {
+                    ally_champion_id,
+                    location_id,
+                } => {
+                    self.champion_info
+                        .ally
+                        .entry(ally_champion_id)
+                        .and_modify(|champion_info| champion_info.last_seen = Some(location_id));
+                }
+                Message::StatusEnemyLocation {
+                    enemy_champion_id,
+                    location_id,
+                } => {
+                    self.champion_info
+                        .enemy
+                        .entry(enemy_champion_id)
+                        .and_modify(|champion_info| champion_info.last_seen = Some(location_id));
+                }
+                Message::StatusAllyGemsHeld {
+                    ally_champion_id,
+                    gems_held_tens,
+                } => {
+                    self.champion_info
+                        .ally
+                        .entry(ally_champion_id)
+                        .and_modify(|champion_info| {
+                            champion_info.gems_held = Some(gems_held_tens as u32 * 10)
+                        });
+                }
+                Message::StatusEnemyGemsHeld {
+                    enemy_champion_id,
+                    gems_held_tens,
+                } => {
+                    self.champion_info
+                        .enemy
+                        .entry(enemy_champion_id)
+                        .and_modify(|champion_info| {
+                            champion_info.gems_held = Some(gems_held_tens as u32 * 10)
+                        });
+                }
+                _ => (),
+            }
+        }
+    }
 
-        self.map.distance_fields.lazy_discover_from_queue();
-        self.map.distance_fields.reset_discovered_state();
-        self.message_board.sync();
+    pub fn update_by_visible(&mut self) {
+        // TODO
     }
 }

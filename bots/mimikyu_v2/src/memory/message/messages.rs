@@ -5,7 +5,6 @@ const MESSAGE_TYPE_BITS: u32 = 4;
 const ID_BITS: u32 = 8;
 const SIGNAL_STRENGTH_BITS: u32 = 4;
 const CHAMPION_BITS: u32 = 4;
-const ACKNOWLEDGEMENT_BITS: u32 = 1;
 const HEALTH_BITS: u32 = 8;
 const GEMS_BITS: u32 = 8;
 
@@ -71,11 +70,7 @@ fn bits_to_champion(bits: u32) -> ChampionType {
 }
 
 fn bits_to_optional_champion(bits: u32) -> Option<ChampionType> {
-    if bits == NO_CHAMPION_BITS {
-        None
-    } else {
-        Some(bits_to_champion(bits))
-    }
+    ChampionType::try_from(bits as i32).ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +139,7 @@ impl MessageType {
                 Self::FarmClear | Self::GroupTogether | Self::EndgameAltarProtect => ID_BITS,
                 Self::FarmHelp => ID_BITS + SIGNAL_STRENGTH_BITS + 3 * CHAMPION_BITS,
                 Self::FarmCollection | Self::FarmGoingToCamp => ID_BITS + CHAMPION_BITS,
-                Self::CombatHeal => ID_BITS + SIGNAL_STRENGTH_BITS + ACKNOWLEDGEMENT_BITS,
+                Self::CombatHeal => ID_BITS + SIGNAL_STRENGTH_BITS,
                 Self::CombatLosingFightNeedHelp | Self::CombatWinningFightWantHelp => {
                     ID_BITS + SIGNAL_STRENGTH_BITS + CHAMPION_BITS
                 }
@@ -186,12 +181,12 @@ pub enum Message {
     CombatLosingFightNeedHelp {
         location_id: LocationID,
         signal_strength: u16,
-        ally_champion: ChampionType,
+        ally_champion: Option<ChampionType>,
     },
     CombatWinningFightWantHelp {
         location_id: LocationID,
         signal_strength: u16,
-        ally_champion: ChampionType,
+        ally_champion: Option<ChampionType>,
     },
     CombatTargetEnemy {
         enemy_champion_id: ChampionType,
@@ -218,7 +213,7 @@ pub enum Message {
         gems_held_tens: u32,
     },
     StatusEnemyGemsHeld {
-        ally_champion_id: ChampionType,
+        enemy_champion_id: ChampionType,
         gems_held_tens: u32,
     },
 
@@ -232,6 +227,37 @@ pub enum Message {
 }
 
 impl Message {
+    pub fn farm_help(camp_group_id: CampGroupID, signal_strength: u16) -> Self {
+        Self::FarmHelp {
+            camp_group_id,
+            signal_strength,
+            ally_champions_helping: [None; 3],
+        }
+    }
+
+    pub fn farm_collection(camp_group_id: CampGroupID) -> Self {
+        Self::FarmCollection {
+            camp_group_id,
+            ally_champion_claiming: None,
+        }
+    }
+
+    pub fn combat_losing_fight_need_help(location_id: LocationID, signal_strength: u16) -> Self {
+        Self::CombatLosingFightNeedHelp {
+            location_id,
+            signal_strength,
+            ally_champion: None,
+        }
+    }
+
+    pub fn combat_winning_fight_want_help(location_id: LocationID, signal_strength: u16) -> Self {
+        Self::CombatWinningFightWantHelp {
+            location_id,
+            signal_strength,
+            ally_champion: None,
+        }
+    }
+
     pub fn message_type(&self) -> MessageType {
         match self {
             Self::FarmClear { .. } => MessageType::FarmClear,
@@ -250,6 +276,63 @@ impl Message {
             Self::StatusEnemyGemsHeld { .. } => MessageType::StatusEnemyGemsHeld,
             Self::GroupTogether { .. } => MessageType::GroupTogether,
             Self::EndgameAltarProtect { .. } => MessageType::EndgameAltarProtect,
+        }
+    }
+
+    pub fn request_key(&self) -> Option<(MessageType, u8)> {
+        match self {
+            Self::FarmHelp { camp_group_id, .. } | Self::FarmCollection { camp_group_id, .. } => {
+                Some((self.message_type(), camp_group_id.0 as u8))
+            }
+            Self::CombatLosingFightNeedHelp { location_id, .. }
+            | Self::CombatWinningFightWantHelp { location_id, .. } => {
+                Some((self.message_type(), location_id.as_byte()))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn respond(&mut self, responder: ChampionType) -> bool {
+        match self {
+            Self::FarmHelp {
+                ally_champions_helping,
+                ..
+            } => {
+                if ally_champions_helping.contains(&Some(responder)) {
+                    return false;
+                }
+                match ally_champions_helping
+                    .iter_mut()
+                    .find(|slot| slot.is_none())
+                {
+                    Some(slot) => {
+                        *slot = Some(responder);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            Self::FarmCollection {
+                ally_champion_claiming,
+                ..
+            } => {
+                if ally_champion_claiming.is_none() {
+                    *ally_champion_claiming = Some(responder);
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::CombatLosingFightNeedHelp { ally_champion, .. }
+            | Self::CombatWinningFightWantHelp { ally_champion, .. } => {
+                if ally_champion.is_none() {
+                    *ally_champion = Some(responder);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
         }
     }
 
@@ -317,7 +400,7 @@ impl Message {
                     (*signal_strength).min(SIGNAL_STRENGTH_MAX) as u32,
                     SIGNAL_STRENGTH_BITS,
                 );
-                writer.push(champion_to_bits(*ally_champion), CHAMPION_BITS);
+                writer.push(optional_champion_to_bits(*ally_champion), CHAMPION_BITS);
             }
             Self::CombatTargetEnemy { enemy_champion_id } => {
                 writer.push(champion_to_bits(*enemy_champion_id), CHAMPION_BITS);
@@ -353,19 +436,22 @@ impl Message {
             Self::StatusAllyGemsHeld {
                 ally_champion_id,
                 gems_held_tens,
-            }
-            | Self::StatusEnemyGemsHeld {
-                ally_champion_id,
-                gems_held_tens,
             } => {
                 writer.push(champion_to_bits(*ally_champion_id), CHAMPION_BITS);
+                writer.push((*gems_held_tens).min(GEMS_HELD_TENS_MAX), GEMS_BITS);
+            }
+            Self::StatusEnemyGemsHeld {
+                enemy_champion_id,
+                gems_held_tens,
+            } => {
+                writer.push(champion_to_bits(*enemy_champion_id), CHAMPION_BITS);
                 writer.push((*gems_held_tens).min(GEMS_HELD_TENS_MAX), GEMS_BITS);
             }
             Self::GroupTogether { location_id } => {
                 writer.push(location_id.as_byte() as u32, ID_BITS);
             }
             Self::EndgameAltarProtect { altar_id } => {
-                writer.push(altar_id.0 as u32, ID_BITS);
+                writer.push(altar_id.0 as u32 & 0x3F, ID_BITS);
             }
         }
 
@@ -403,12 +489,12 @@ impl Message {
             MessageType::CombatLosingFightNeedHelp => Self::CombatLosingFightNeedHelp {
                 location_id: LocationID::from_byte(reader.take(ID_BITS) as u8),
                 signal_strength: reader.take(SIGNAL_STRENGTH_BITS) as u16,
-                ally_champion: bits_to_champion(reader.take(CHAMPION_BITS)),
+                ally_champion: bits_to_optional_champion(reader.take(CHAMPION_BITS)),
             },
             MessageType::CombatWinningFightWantHelp => Self::CombatWinningFightWantHelp {
                 location_id: LocationID::from_byte(reader.take(ID_BITS) as u8),
                 signal_strength: reader.take(SIGNAL_STRENGTH_BITS) as u16,
-                ally_champion: bits_to_champion(reader.take(CHAMPION_BITS)),
+                ally_champion: bits_to_optional_champion(reader.take(CHAMPION_BITS)),
             },
             MessageType::CombatTargetEnemy => Self::CombatTargetEnemy {
                 enemy_champion_id: bits_to_champion(reader.take(CHAMPION_BITS)),
@@ -434,7 +520,7 @@ impl Message {
                 gems_held_tens: reader.take(GEMS_BITS),
             },
             MessageType::StatusEnemyGemsHeld => Self::StatusEnemyGemsHeld {
-                ally_champion_id: bits_to_champion(reader.take(CHAMPION_BITS)),
+                enemy_champion_id: bits_to_champion(reader.take(CHAMPION_BITS)),
                 gems_held_tens: reader.take(GEMS_BITS),
             },
             MessageType::GroupTogether => Self::GroupTogether {

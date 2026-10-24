@@ -1,4 +1,4 @@
-use crate::memory::message::messages::Message;
+use crate::memory::message::messages::{Message, MessageType};
 use crate::sdk_interact::map::{chebyshev_distance, Center};
 use crate::{
     draft::{
@@ -471,161 +471,258 @@ pub fn print_champion_info(memory: &ChampionMemory) {
     }
 }
 
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{:02X}", byte))
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+fn safe_locate(memory: &ChampionMemory, location_id: LocationID) -> Option<Vec2> {
+    let points_of_interest = &memory.map.points_of_interest;
+    match location_id {
+        LocationID::CampGroup(id) => points_of_interest.camp_group_centers.get(id.0).copied(),
+        LocationID::Altar(id) => points_of_interest.altar_locations.get(id.0).copied(),
+        LocationID::ControlPoint(id) => points_of_interest.control_points.get(id.0).copied(),
+        LocationID::Shortcut(id) => points_of_interest.shortcut_points.get(id.0).copied(),
+    }
+}
+
+fn message_location(memory: &ChampionMemory, message: &Message) -> Option<Vec2> {
+    let points_of_interest = &memory.map.points_of_interest;
+    match message {
+        Message::FarmClear { camp_group_id }
+        | Message::FarmHelp { camp_group_id, .. }
+        | Message::FarmCollection { camp_group_id, .. }
+        | Message::FarmGoingToCamp { camp_group_id, .. } => points_of_interest
+            .camp_group_centers
+            .get(camp_group_id.0)
+            .copied(),
+        Message::CombatHeal { location_id, .. }
+        | Message::CombatLosingFightNeedHelp { location_id, .. }
+        | Message::CombatWinningFightWantHelp { location_id, .. }
+        | Message::StatusAllyLocation { location_id, .. }
+        | Message::StatusEnemyLocation { location_id, .. }
+        | Message::GroupTogether { location_id } => safe_locate(memory, *location_id),
+        Message::EndgameAltarProtect { altar_id } => {
+            points_of_interest.altar_locations.get(altar_id.0).copied()
+        }
+        _ => None,
+    }
+}
+
+fn message_responders(message: &Message) -> Vec<ChampionType> {
+    match message {
+        Message::FarmHelp {
+            ally_champions_helping,
+            ..
+        } => ally_champions_helping.iter().flatten().copied().collect(),
+        Message::FarmCollection {
+            ally_champion_claiming,
+            ..
+        } => ally_champion_claiming.iter().copied().collect(),
+        Message::CombatLosingFightNeedHelp { ally_champion, .. }
+        | Message::CombatWinningFightWantHelp { ally_champion, .. } => {
+            ally_champion.iter().copied().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn describe_responders(message: &Message) -> String {
+    if message.request_key().is_none() {
+        return String::new();
+    }
+    let responders: Vec<ChampionType> = message_responders(message);
+    if responders.is_empty() {
+        String::from(" | no responders yet")
+    } else {
+        format!(" | responders {:?}", responders)
+    }
+}
+
+fn draw_message(memory: &ChampionMemory, message: &Message) {
+    cambc::debug_block! {
+        let location: Option<Vec2> = message_location(memory, message);
+
+        if let Some(center) = location {
+            match message {
+                Message::FarmClear { .. } => draw_cross(center, 2, GREY),
+                Message::FarmHelp { signal_strength, .. } => {
+                    draw_circle(center, *signal_strength as f32, LIGHT_GREEN)
+                }
+                Message::CombatHeal { signal_strength, .. } => {
+                    draw_circle(center, *signal_strength as f32, LIGHT_GREEN)
+                }
+                Message::CombatLosingFightNeedHelp { signal_strength, .. } => {
+                    draw_circle(center, *signal_strength as f32, RED)
+                }
+                Message::CombatWinningFightWantHelp { signal_strength, .. } => {
+                    draw_circle(center, *signal_strength as f32, LIGHT_RED)
+                }
+                Message::StatusAllyLocation { .. } => draw_circle(center, 2.0, LIGHT_GREEN),
+                Message::StatusEnemyLocation { .. } => draw_circle(center, 2.0, LIGHT_RED),
+                Message::GroupTogether { .. } => draw_circle(center, 15.0, PURPLE),
+                Message::EndgameAltarProtect { .. } => draw_circle(center, 15.0, PURPLE),
+                _ => (),
+            }
+
+            let line_color: u32 = match message {
+                Message::FarmHelp { .. } => LIGHT_GREEN,
+                Message::FarmCollection { .. } => ORANGE,
+                Message::CombatLosingFightNeedHelp { .. } => RED,
+                Message::CombatWinningFightWantHelp { .. } => LIGHT_RED,
+                _ => WHITE,
+            };
+            for champion in message_responders(message) {
+                let responder_location: Option<Vec2> = memory
+                    .champion_info
+                    .ally
+                    .get(&champion)
+                    .and_then(|info| info.last_seen)
+                    .and_then(|location_id| safe_locate(memory, location_id));
+                if let Some(point) = responder_location {
+                    let _ = cambc::debug::draw_line(point, center, line_color);
+                    let _ = cambc::debug::draw_dot(point, COLOR_ALLY_CHAMPION);
+                }
+            }
+        }
+    }
+}
+
+pub fn print_board_layout(memory: &ChampionMemory) {
+    cambc::debug_block! {
+        let mut shared: [u8; 8] = [0; 8];
+        match cambc::shared_memory().read(0, &mut shared) {
+            Err(_) => println!("  board bytes: unreadable"),
+            Ok(_) => {
+                println!("  raw bytes: {}", hex_bytes(&shared));
+
+                let mut free_run_start: Option<usize> = None;
+                let mut position: usize = 0;
+                while position < shared.len() {
+                    let byte: u8 = shared[position];
+                    if byte >> 2 == 0b11_1111 {
+                        if free_run_start.is_none() {
+                            free_run_start = Some(position);
+                        }
+                        position += 1;
+                        continue;
+                    }
+
+                    if let Some(start) = free_run_start.take() {
+                        println!("  [{}..{}] free ({} bytes)", start, position, position - start);
+                    }
+
+                    let message_type: MessageType = MessageType::from_nibble(byte >> 4);
+                    let length: usize = message_type.byte_length().min(shared.len() - position);
+                    let ours: bool = memory
+                        .message_board
+                        .owned_messages
+                        .iter()
+                        .any(|owned| owned.span.offset == position);
+                    println!(
+                        "  [{}..{}] {:?} ({} bytes) {}{}",
+                        position,
+                        position + length,
+                        message_type,
+                        length,
+                        hex_bytes(&shared[position..position + length]),
+                        if ours { " (ours)" } else { "" },
+                    );
+                    position += length;
+                }
+                if let Some(start) = free_run_start.take() {
+                    println!("  [{}..{}] free ({} bytes)", start, position, position - start);
+                }
+            }
+        }
+    }
+}
+
 pub fn print_message_board(memory: &ChampionMemory) {
     cambc::debug_block! {
         let message_board = &memory.message_board;
 
         println!("== MESSAGE BOARD ==");
-        println!("The 8 shared bytes are a heap of messages. A free byte is all ones. Each champion frees its own messages the next time it syncs, collects everyone else's into its inbox, and queues messages that do not fit until space frees up.");
+        println!("The 8 shared bytes are a heap of messages, and a byte with its top six bits set is free. Each champion frees its own messages at the start of its next sync, after reading any replies written into them, and collects every other champion's messages into its inbox. Messages that do not fit wait in the pending queue until space frees up.");
+        println!("Farm help, farm collection and the two combat help messages can be answered in place. respond_to queues the champion, and the next sync or flush writes it into the first empty responder slot. The sender then sees the update as a reply.");
+        println!("On the map: a grey cross is a farm clear, circles show the signal strength of a message (light green for farm help, heals and ally locations, red for losing a fight, light red for winning a fight and enemy locations, purple for group and altar protection). Each responding champion with a known location gets a mint dot and a line to the message.");
+        println!("Sections: board layout (raw bytes and where each message sits), owned (messages we placed, as sent), pending (waiting for space), pending responses (replies queued for the next sync or flush), inbox (new or changed messages from other champions), replies (our own messages that a responder updated).");
         println!(
-            "Owned: {:?}, pending: {}, inbox: {}, next fit start: {}",
-            message_board.owned_messages,
+            "Owned: {}, pending: {}, pending responses: {}, inbox: {}, replies: {}, seen: {}, next fit start: {}",
+            message_board.owned_messages.len(),
             message_board.pending_messages.len(),
+            message_board.pending_responses.len(),
             message_board.inbox.len(),
+            message_board.responses.len(),
+            message_board.seen_messages.len(),
             message_board.next_fit_start,
         );
-        for message in &message_board.inbox {
-            println!("  inbox: {:?}", message);
+
+        println!("Board layout:");
+        print_board_layout(memory);
+
+        println!("Owned messages:");
+        for owned in &message_board.owned_messages {
+            let message: Message = Message::from_bytes(&owned.bytes[..owned.span.length]);
+            println!(
+                "  [{}..{}] {:?}{}",
+                owned.span.offset,
+                owned.span.offset + owned.span.length,
+                message,
+                describe_responders(&message),
+            );
         }
+
+        println!("Pending messages:");
         for message in &message_board.pending_messages {
-            println!("  pending: {:?}", message);
+            println!("  {:?}{}", message, describe_responders(message));
+        }
+
+        println!("Pending responses:");
+        for response in &message_board.pending_responses {
+            println!(
+                "  [{}..{}] {:?} responder {:?}",
+                response.span.offset,
+                response.span.offset + response.span.length,
+                response.request_key.0,
+                response.responder,
+            );
+        }
+
+        println!("Inbox:");
+        for received in &message_board.inbox {
+            println!(
+                "  [{}..{}] {:?}{}",
+                received.span.offset,
+                received.span.offset + received.span.length,
+                received.message,
+                describe_responders(&received.message),
+            );
+        }
+
+        println!("Replies to our messages:");
+        for reply in &message_board.responses {
+            println!("  {:?}{}", reply, describe_responders(reply));
         }
     }
 }
 
 pub fn draw_sent_messages(memory: &ChampionMemory) {
     cambc::debug_block! {
-        for message in &memory.message_board.inbox {
-            match message {
-                Message::FarmClear { camp_group_id } => {
-                    draw_cross(
-                        memory.map.points_of_interest.camp_group_centers[camp_group_id.0],
-                        2,
-                        GREY,
-                    );
-                }
-                Message::FarmHelp {
-                    camp_group_id,
-                    signal_strength,
-                    ally_champions_helping: _,
-                } => {
-                    draw_circle(
-                        memory.map.points_of_interest.camp_group_centers[camp_group_id.0],
-                        *signal_strength as f32,
-                        LIGHT_GREEN,
-                    );
-                }
-                Message::FarmCollection {
-                    camp_group_id: _,
-                    ally_champion_claiming: _,
-                } => {
-                    // N/A
-                }
-                Message::FarmGoingToCamp {
-                    camp_group_id: _,
-                    ally_champion: _,
-                } => {
-                    // N/A
-                }
-
-                Message::CombatHeal {
-                    location_id,
-                    signal_strength,
-                } => {
-                    draw_circle(
-                        memory.map.points_of_interest.locate(*location_id),
-                        *signal_strength as f32,
-                        LIGHT_GREEN,
-                    );
-                }
-                Message::CombatLosingFightNeedHelp {
-                    location_id,
-                    signal_strength,
-                    ally_champion: _,
-                } => {
-                    draw_circle(
-                        memory.map.points_of_interest.locate(*location_id),
-                        *signal_strength as f32,
-                        RED,
-                    );
-                }
-                Message::CombatWinningFightWantHelp {
-                    location_id,
-                    signal_strength,
-                    ally_champion: _,
-                } => {
-                    draw_circle(
-                        memory.map.points_of_interest.locate(*location_id),
-                        *signal_strength as f32,
-                        LIGHT_RED,
-                    );
-                }
-                Message::CombatTargetEnemy {
-                    enemy_champion_id: _,
-                } => {
-                    // N/A
-                }
-
-                Message::StatusAllyHealth {
-                    ally_champion_id: _,
-                    current_health_in_hundreds: _,
-                } => {
-                    // N/A
-                }
-                Message::StatusEnemyHealth {
-                    enemy_champion_id: _,
-                    current_health_in_hundreds: _,
-                } => {
-                    // N/A
-                }
-                Message::StatusAllyLocation {
-                    ally_champion_id: _,
-                    location_id,
-                } => {
-                    draw_circle(
-                        memory.map.points_of_interest.locate(*location_id),
-                        2.0,
-                        LIGHT_GREEN,
-                    );
-                }
-                Message::StatusEnemyLocation {
-                    enemy_champion_id: _,
-                    location_id,
-                } => {
-                    draw_circle(
-                        memory.map.points_of_interest.locate(*location_id),
-                        2.0,
-                        LIGHT_RED,
-                    );
-                }
-                Message::StatusAllyGemsHeld {
-                    ally_champion_id: _,
-                    gems_held_tens: _,
-                } => {
-                    // N/A
-                }
-                Message::StatusEnemyGemsHeld {
-                    ally_champion_id: _,
-                    gems_held_tens: _,
-                } => {
-                    // N/A
-                }
-
-                Message::GroupTogether { location_id } => {
-                    draw_circle(
-                        memory.map.points_of_interest.locate(*location_id),
-                        15.0,
-                        PURPLE,
-                    );
-                }
-                Message::EndgameAltarProtect { altar_id } => {
-                    draw_circle(
-                        memory.map.points_of_interest.altar_locations[altar_id.0],
-                        15.0,
-                        PURPLE,
-                    );
-                }
-            }
+        for received in &memory.message_board.inbox {
+            draw_message(memory, &received.message);
+        }
+        for owned in &memory.message_board.owned_messages {
+            draw_message(
+                memory,
+                &Message::from_bytes(&owned.bytes[..owned.span.length]),
+            );
+        }
+        for reply in &memory.message_board.responses {
+            draw_message(memory, reply);
         }
     }
 }
