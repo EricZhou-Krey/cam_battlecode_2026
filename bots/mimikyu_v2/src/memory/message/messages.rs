@@ -182,7 +182,6 @@ pub enum Message {
     CombatHeal {
         location_id: LocationID,
         signal_strength: u16,
-        acknowlegement: bool,
     },
     CombatLosingFightNeedHelp {
         location_id: LocationID,
@@ -296,14 +295,12 @@ impl Message {
             Self::CombatHeal {
                 location_id,
                 signal_strength,
-                acknowlegement,
             } => {
                 writer.push(location_id.as_byte() as u32, ID_BITS);
                 writer.push(
                     (*signal_strength).min(SIGNAL_STRENGTH_MAX) as u32,
                     SIGNAL_STRENGTH_BITS,
                 );
-                writer.push(*acknowlegement as u32, ACKNOWLEDGEMENT_BITS);
             }
             Self::CombatLosingFightNeedHelp {
                 location_id,
@@ -402,7 +399,6 @@ impl Message {
             MessageType::CombatHeal => Self::CombatHeal {
                 location_id: LocationID::from_byte(reader.take(ID_BITS) as u8),
                 signal_strength: reader.take(SIGNAL_STRENGTH_BITS) as u16,
-                acknowlegement: reader.take(ACKNOWLEDGEMENT_BITS) == 1,
             },
             MessageType::CombatLosingFightNeedHelp => Self::CombatLosingFightNeedHelp {
                 location_id: LocationID::from_byte(reader.take(ID_BITS) as u8),

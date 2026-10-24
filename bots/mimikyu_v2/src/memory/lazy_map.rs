@@ -42,10 +42,20 @@ impl LazyDistanceFields {
         }
     }
 
+    pub fn reset_discovered_state(&mut self) {
+        self.discovered_this_round = false;
+    }
+
     pub fn lazy_discover_from_queue(&mut self) {
-        if self.discovered_this_round || self.camp_group_discovery_queue.is_empty() {
-            self.discovered_this_round = false;
+        if self.discovered_this_round {
             return;
+        } else if self.camp_group_discovery_queue.is_empty() {
+            if self.altar_distance_field.is_none() {
+                self.try_get_altar_distance_matrix();
+                return;
+            } else {
+                return;
+            }
         }
 
         let mut next_camp_group_id: Option<CampGroupID> =

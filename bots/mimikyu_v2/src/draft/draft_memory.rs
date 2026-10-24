@@ -1,10 +1,7 @@
-use crate::{
-    draft::block::{
-        camp_dm::{CampDraftBlock, CAMP_DRAFT_BYTE_SIZE},
-        control_point_dm::{ControlPointDraftBlock, CONTROL_POINT_DRAFT_SIZE},
-        shortcut_map_dm::{ShortcutDraftBlock, SHORTCUT_DRAFT_BYTE_SIZE},
-    },
-    sdk_interact::debug::post_fuel,
+use crate::draft::block::{
+    camp_dm::{CampDraftBlock, CAMP_DRAFT_BYTE_SIZE},
+    control_point_dm::{ControlPointDraftBlock, CONTROL_POINT_DRAFT_SIZE},
+    shortcut_map_dm::{ShortcutDraftBlock, SHORTCUT_DRAFT_BYTE_SIZE},
 };
 use cambc::{Bitboard, ChampionDraft, DistanceField};
 
@@ -42,18 +39,12 @@ impl DraftMemory {
 
         let mut altar_distance_field: DistanceField = DistanceField::new().unwrap();
 
-        post_fuel("Before Camp Memory");
         let camp_memory: CampDraftBlock = CampDraftBlock::new();
-        post_fuel("After Camp Memory");
 
-        post_fuel("Before Shortcut Memory");
         let shortcut_memory: ShortcutDraftBlock =
             ShortcutDraftBlock::new(&mut altar_distance_field, &blocked_bitboard);
-        post_fuel("After Shortcut Memory");
 
-        post_fuel("Before Control Point Memory");
         let control_point_memory: ControlPointDraftBlock = ControlPointDraftBlock::new();
-        post_fuel("After Control Point Memory");
 
         Self {
             camp_memory,

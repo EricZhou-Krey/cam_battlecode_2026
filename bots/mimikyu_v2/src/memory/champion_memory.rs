@@ -27,6 +27,7 @@ impl ChampionMemory {
         //TODO
 
         self.map.distance_fields.lazy_discover_from_queue();
+        self.map.distance_fields.reset_discovered_state();
         self.message_board.sync();
     }
 }
