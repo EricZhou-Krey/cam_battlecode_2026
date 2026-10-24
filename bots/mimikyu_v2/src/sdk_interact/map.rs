@@ -4,17 +4,20 @@ pub fn chebyshev_distance(first: Vec2, second: Vec2) -> i32 {
     (first.x - second.x).abs().max((first.y - second.y).abs())
 }
 
-pub fn step_with_fallback(me: &Champion, field: &DistanceField, goal: Vec2) -> bool {
+pub fn step_with_fallback(field_option: Option<&DistanceField>, goal: Vec2) -> bool {
+    let me: &Champion = cambc::self_champion().unwrap().unwrap();
     let pos = me.position().unwrap();
 
-    for dir in field.next_moves_from(pos).unwrap() {
-        if !me.can_move().unwrap() {
-            return false;
-        }
-        match me.r#move(dir) {
-            Ok(true) => return true,
-            Ok(false) => continue,
-            Err(_e) => continue,
+    if let Some(field) = field_option {
+        for dir in field.next_moves_from(pos).unwrap() {
+            if !me.can_move().unwrap() {
+                return false;
+            }
+            match me.r#move(dir) {
+                Ok(true) => return true,
+                Ok(false) => continue,
+                Err(_e) => continue,
+            }
         }
     }
 
@@ -23,6 +26,7 @@ pub fn step_with_fallback(me: &Champion, field: &DistanceField, goal: Vec2) -> b
             return true;
         }
     }
+
     false
 }
 

@@ -1,7 +1,8 @@
 use crate::{
     action::Action,
     draft::draft_memory::{DraftMemory, DraftMemoryBlock},
-    memory::champion_memory::ChampionMemory,
+    memory::{champion_memory::ChampionMemory, CampGroupID, CampID},
+    sdk_interact::debug::{debug_champion_turn, debug_current_action, debug_draft_init},
 };
 use cambc::ChampionDraft;
 
@@ -25,7 +26,7 @@ impl Strategy {
             Self::Draft => {
                 let draft_memory: DraftMemory = DraftMemory::new();
                 let _ = cambc::draft_memory().submit(&draft_memory.as_bytes());
-                // debug_draft_init(&draft_memory);
+                debug_draft_init(&draft_memory);
 
                 loop {
                     let pick: ChampionDraft = draft_memory.pick();
@@ -38,6 +39,37 @@ impl Strategy {
                     cambc::draft_memory().bytes().try_into().unwrap(),
                 );
                 let mut current_action: Action = Action::Idle;
+
+                // --- DEBUG SETUP START ---
+                current_action = Action::MoveToLocation {
+                    distance_field: None,
+                    location_id: Some(crate::memory::LocationID::CampGroup(
+                        champion_memory
+                            .map
+                            .distance_fields
+                            .camp_group_discovery_queue[0],
+                    )),
+                    accepted_distance: 3,
+                    action_group_type: crate::action::ActionGroupType::Intermediate,
+                };
+                for i in 1..champion_memory.map.camp_group_count {
+                    champion_memory
+                        .action_state
+                        .action_queue
+                        .push_back(Action::MoveToLocation {
+                            distance_field: None,
+                            location_id: Some(crate::memory::LocationID::CampGroup(
+                                champion_memory
+                                    .map
+                                    .distance_fields
+                                    .camp_group_discovery_queue[i],
+                            )),
+                            accepted_distance: 3,
+                            action_group_type: crate::action::ActionGroupType::Intermediate,
+                        });
+                }
+                // --- DEBUG SETUP END ---
+
                 loop {
                     champion_memory.map.distance_fields.reset_discovered_state();
                     champion_memory.map.tick_camp_group_respawn_timers();
@@ -52,8 +84,8 @@ impl Strategy {
                         .lazy_discover_from_queue();
                     champion_memory.message_board.flush();
 
-                    // debug_champion_turn(&champion_memory);
-                    // debug_current_action(&current_action, &champion_memory);
+                    //debug_champion_turn(&champion_memory);
+                    debug_current_action(&current_action, &champion_memory);
 
                     cambc::end_turn();
                 }

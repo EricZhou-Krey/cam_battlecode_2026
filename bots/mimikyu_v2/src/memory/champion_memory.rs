@@ -1,10 +1,11 @@
 use crate::{
+    action::action_state::ActionState,
     draft::draft_memory::{DraftMemory, DraftMemoryBlock, DRAFT_MEMORY_BYTE_SIZE},
     memory::{
         champion_info::AllChampionInfo,
         lazy_map::LazyMap,
         message::{message_board::MessageBoard, messages::Message},
-        AltarID,
+        LocationID,
     },
 };
 
@@ -13,8 +14,7 @@ pub struct ChampionMemory {
     pub map: LazyMap,
     pub champion_info: AllChampionInfo,
     pub message_board: MessageBoard,
-
-    pub last_bastion: Option<AltarID>,
+    pub action_state: ActionState,
 }
 
 impl ChampionMemory {
@@ -25,8 +25,7 @@ impl ChampionMemory {
             map: LazyMap::new(&draft_memory),
             champion_info: AllChampionInfo::new(),
             message_board: MessageBoard::new(),
-
-            last_bastion: None,
+            action_state: ActionState::new(),
         }
     }
 
@@ -36,6 +35,17 @@ impl ChampionMemory {
                 Message::FarmClear { camp_group_id } => {
                     self.map.camp_group_respawn_timer[camp_group_id.0] =
                         self.map.camp_group_reset_timer[camp_group_id.0];
+                }
+                Message::FarmGoingToCamp {
+                    camp_group_id,
+                    ally_champion,
+                } => {
+                    self.champion_info
+                        .ally
+                        .entry(ally_champion)
+                        .and_modify(|champion_info| {
+                            champion_info.last_seen = Some(LocationID::CampGroup(camp_group_id))
+                        });
                 }
                 Message::StatusAllyHealth {
                     ally_champion_id,
@@ -102,7 +112,7 @@ impl ChampionMemory {
                         });
                 }
                 Message::EndgameAltarProtect { altar_id } => {
-                    self.last_bastion = Some(altar_id);
+                    self.action_state.last_bastion = Some(altar_id);
                 }
                 _ => (),
             }

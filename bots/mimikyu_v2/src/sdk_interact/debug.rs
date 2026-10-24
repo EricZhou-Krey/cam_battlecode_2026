@@ -1,3 +1,4 @@
+use crate::action::{Action, ActionGroupType};
 use crate::memory::message::messages::{Message, MessageType};
 use crate::sdk_interact::map::{chebyshev_distance, Center};
 use crate::{
@@ -8,9 +9,12 @@ use crate::{
         },
         draft_memory::{DraftMemory, DraftMemoryBlock, DRAFT_MEMORY_BYTE_SIZE},
     },
-    memory::{champion_info::ChampionInfo, champion_memory::ChampionMemory, LocationID},
+    memory::{
+        champion_info::ChampionInfo, champion_memory::ChampionMemory, AltarID, CampGroupID,
+        LocationID,
+    },
 };
-use cambc::{CampGroup, ChampionType, Team, Vec2};
+use cambc::{AbilityInfo, CampGroup, ChampionType, DistanceField, Team, Vec2};
 use std::collections::HashMap;
 
 const GREY: u32 = 0x808080;
@@ -36,8 +40,13 @@ const COLOR_CAMP_GROUP: u32 = LIGHT_GREEN;
 const COLOR_ALTAR: u32 = PURPLE;
 const COLOR_ALLY_CHAMPION: u32 = MINT_GREEN;
 const COLOR_ENEMY_CHAMPION: u32 = RED;
+const COLOR_ACTION_TARGET: u32 = WHITE;
+const COLOR_ACTION_SELF: u32 = MINT_GREEN;
+const COLOR_DASH_LANDING: u32 = YELLOW;
+const PATH_PREVIEW_STEPS: u32 = 12;
+const SHORTCUT_LOOKAHEAD: i32 = 8;
+const SHORTCUT_PRINT_LIMIT: usize = 6;
 
-const CIRCLE_SEGMENTS: u32 = 12;
 const MIN_CIRCLE_RADIUS: f32 = 1.0;
 const LINES_TO_NEAREST_CAMPS: usize = 5;
 const QUEUE_PREVIEW_LENGTH: usize = 5;
@@ -76,29 +85,27 @@ fn describe_location(memory: &ChampionMemory, location: Option<LocationID>) -> S
     }
 }
 
-fn circle_point(center: Vec2, radius: f32, step: u32) -> Vec2 {
-    let angle: f32 = step as f32 * std::f32::consts::TAU / CIRCLE_SEGMENTS as f32;
-
-    Vec2 {
-        x: center.x + (radius * angle.cos()).round() as i32,
-        y: center.y + (radius * angle.sin()).round() as i32,
-    }
-}
-
 pub fn draw_circle(center: Vec2, radius: f32, rgb: u32) {
     cambc::debug_block! {
         let radius: f32 = radius.max(MIN_CIRCLE_RADIUS);
-        let mut previous: Vec2 = circle_point(center, radius, 0);
+        let min: Vec2 = Vec2 {
+            x: center.x - radius.round() as i32,
+            y: center.y - radius.round() as i32,
+        };
+        let max: Vec2 = Vec2 {
+            x: center.x + radius.round() as i32,
+            y: center.y + radius.round() as i32,
+        };
 
-        for step in 1..=CIRCLE_SEGMENTS {
-            let next: Vec2 = circle_point(center, radius, step);
+        let top_left = Vec2 { x: min.x, y: min.y };
+        let top_right = Vec2 { x: max.x, y: min.y };
+        let bottom_right = Vec2 { x: max.x, y: max.y };
+        let bottom_left = Vec2 { x: min.x, y: max.y };
 
-            if next.x != previous.x || next.y != previous.y {
-                let _ = cambc::debug::draw_line(previous, next, rgb);
-            }
-
-            previous = next;
-        }
+        let _ = cambc::debug::draw_line(top_left, top_right, rgb);
+        let _ = cambc::debug::draw_line(top_right, bottom_right, rgb);
+        let _ = cambc::debug::draw_line(bottom_right, bottom_left, rgb);
+        let _ = cambc::debug::draw_line(bottom_left, top_left, rgb);
     }
 }
 
@@ -727,6 +734,365 @@ pub fn draw_sent_messages(memory: &ChampionMemory) {
     }
 }
 
+fn action_group_color(action_group_type: ActionGroupType) -> u32 {
+    match action_group_type {
+        ActionGroupType::Intermediate => GREY,
+        ActionGroupType::Farm => LIGHT_GREEN,
+        ActionGroupType::Support => BLUE,
+        ActionGroupType::ChampionCombat => RED,
+        ActionGroupType::Survival => ORANGE,
+    }
+}
+
+fn describe_distance(distance: Option<u16>) -> String {
+    match distance {
+        Some(u16::MAX) => String::from("unreached"),
+        Some(value) => value.to_string(),
+        None => String::from("unknown"),
+    }
+}
+
+fn debug_action_header(name: &str, action: &Action) {
+    println!(
+        "== CURRENT ACTION: {name} (precedence {}) ==",
+        action.precedence()
+    );
+}
+
+fn resolve_move_field<'a>(
+    distance_field: &'a Option<DistanceField>,
+    target_id: LocationID,
+    memory: &'a ChampionMemory,
+) -> (Option<&'a DistanceField>, &'static str) {
+    if let Some(field) = distance_field {
+        return (Some(field), "owned by the action");
+    }
+    if let LocationID::CampGroup(camp_group_id) = target_id {
+        if let Some(Some(field)) = memory
+            .map
+            .distance_fields
+            .camp_group_distance_fields
+            .get(camp_group_id.0)
+        {
+            return (Some(field), "shared lazy cache");
+        }
+    }
+    (None, "not computed yet")
+}
+
+fn debug_move_to_location(
+    action: &Action,
+    distance_field: &Option<DistanceField>,
+    location_id: Option<LocationID>,
+    accepted_distance: u16,
+    action_group_type: ActionGroupType,
+    memory: &ChampionMemory,
+) {
+    cambc::debug_block! {
+        let group_color: u32 = action_group_color(action_group_type);
+
+        debug_action_header("MOVE TO LOCATION", action);
+        println!("The champion walks to a location by always stepping to the neighbouring tile with the lowest distance field value. The field is rooted at the target, so each value is the number of steps still to walk, and the action ends when the value at the champion's tile is at most the accepted distance.");
+        println!("On the map: the champion is a mint dot, the target is a white dot with a ring of the accepted distance, and the line from the champion follows the field downhill for {PATH_PREVIEW_STEPS} steps, coloured by action group (grey intermediate, light green farm, blue support, red champion combat, orange survival). A yellow dot and line mark the best legal dash landing, and blue or pink lines mark shortcuts within {SHORTCUT_LOOKAHEAD} tiles.");
+        println!("Group: {:?}, accepted distance: {}", action_group_type, accepted_distance);
+
+        match location_id {
+            None => println!("No target location is set, so the action finishes as soon as it runs."),
+            Some(target_id) => {
+                let target: Option<Vec2> = safe_locate(memory, target_id);
+                let champion = cambc::self_champion().ok().flatten();
+                let position: Option<Vec2> = champion.and_then(|me| me.position().ok());
+                let (field, field_source): (Option<&DistanceField>, &str) =
+                    resolve_move_field(distance_field, target_id, memory);
+
+                println!(
+                    "Target: {:?} at {:?}",
+                    target_id,
+                    target.map(|point| (point.x, point.y))
+                );
+                println!("Distance field: {field_source}");
+
+                if let Some(target_point) = target {
+                    let _ = cambc::debug::draw_dot(target_point, COLOR_ACTION_TARGET);
+                    draw_circle(target_point, accepted_distance as f32, group_color);
+                }
+                if let Some(point) = position {
+                    let _ = cambc::debug::draw_dot(point, COLOR_ACTION_SELF);
+                }
+
+                match (field, position) {
+                    (Some(field), Some(point)) => {
+                        let current_distance: Option<u16> = field.get(point).ok();
+                        println!(
+                            "Position: ({}, {}), distance to target: {}",
+                            point.x,
+                            point.y,
+                            describe_distance(current_distance)
+                        );
+                        match current_distance {
+                            Some(u16::MAX) => println!("Status: the target cannot be walked to from here, so only a dash or teleport can help."),
+                            Some(distance) if distance <= accepted_distance => println!("Status: arrived, the action finishes on its next turn."),
+                            Some(_) => println!("Status: walking."),
+                            None => println!("Status: the position is outside the field."),
+                        }
+
+                        let mut path_tile: Vec2 = point;
+                        let mut path_steps: u32 = 0;
+
+                        while path_steps < PATH_PREVIEW_STEPS {
+                            match field.next_move_from(path_tile) {
+                                Ok(Some(next_tile)) => {
+                                    let from: Vec2 = position.unwrap() + path_tile;
+                                    let to: Vec2 = position.unwrap() + next_tile;
+
+                                    let _ = cambc::debug::draw_line(from, to, group_color);
+
+                                    path_tile = next_tile;
+                                    path_steps += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+
+                        println!(
+                            "Path preview: {} steps, ends at ({}, {}) with distance {}",
+                            path_steps,
+                            path_tile.x + position.unwrap().x,
+                            path_tile.y + position.unwrap().y,
+                            describe_distance(field.get(path_tile).ok())
+                        );
+
+                        if let Some(me) = champion {
+                            let crystal_count: u32 = me
+                                .consumables()
+                                .iter()
+                                .filter(|consumable| {
+                                    matches!(consumable.kind(), cambc::ConsumableType::TpCrystal)
+                                })
+                                .map(|consumable| consumable.count().unwrap_or(0))
+                                .sum();
+                            println!("Teleport crystals held: {crystal_count}");
+
+                            for ability in me.abilities() {
+                                if !ability.is_dash() {
+                                    continue;
+                                }
+                                let dash_range: Option<f32> = match ability.info() {
+                                    Ok(Some(AbilityInfo::Dash(dash))) => Some(dash.range),
+                                    _ => None,
+                                };
+                                println!(
+                                    "Dash ability slot {}: ready {:?}, cooldown {:?}, range {:?}",
+                                    ability.slot(),
+                                    ability.is_ready(),
+                                    ability.cooldown(),
+                                    dash_range
+                                );
+
+                                let mut best_landing: Option<(u16, Vec2)> = None;
+                                if let Ok(landing_tiles) = ability.valid_tiles() {
+                                    if let Ok(landing_positions) = landing_tiles.positions() {
+                                        for landing in landing_positions {
+                                            let Ok(landing_distance) = field.get(landing) else {
+                                                continue;
+                                            };
+                                            if landing_distance == u16::MAX {
+                                                continue;
+                                            }
+                                            if best_landing.is_none_or(|(best_distance, _)| {
+                                                landing_distance < best_distance
+                                            }) {
+                                                best_landing = Some((landing_distance, landing));
+                                            }
+                                        }
+                                    }
+                                }
+                                match best_landing {
+                                    Some((landing_distance, landing)) => {
+                                        let gain: u16 = current_distance
+                                            .unwrap_or(u16::MAX)
+                                            .saturating_sub(landing_distance);
+                                        println!(
+                                            "  best landing ({}, {}) at distance {}, gain {}",
+                                            landing.x, landing.y, landing_distance, gain
+                                        );
+                                        let _ = cambc::debug::draw_line(point, landing, COLOR_DASH_LANDING);
+                                        let _ = cambc::debug::draw_dot(landing, COLOR_DASH_LANDING);
+                                    }
+                                    None => println!("  no legal landing tile with a known distance"),
+                                }
+                            }
+                        }
+
+                        let mut nearby_shortcuts: Vec<(u16, i32, Vec2, Vec2, u16)> = Vec::new();
+                        for (start, landing) in &memory.map.points_of_interest.shortcuts {
+                            let approach: i32 =
+                                (start.x - point.x).abs().max((start.y - point.y).abs());
+                            if approach > SHORTCUT_LOOKAHEAD {
+                                continue;
+                            }
+                            let Ok(landing_distance) = field.get(*landing) else {
+                                continue;
+                            };
+                            if landing_distance == u16::MAX {
+                                continue;
+                            }
+                            let saving: u16 = current_distance.unwrap_or(u16::MAX).saturating_sub(
+                                (approach as u16)
+                                    .saturating_add(1)
+                                    .saturating_add(landing_distance),
+                            );
+                            nearby_shortcuts.push((saving, approach, *start, *landing, landing_distance));
+                        }
+                        nearby_shortcuts.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
+
+                        println!(
+                            "Shortcuts within {} tiles: {} (estimated saving counts the approach as a straight walk and a jump cost of 1)",
+                            SHORTCUT_LOOKAHEAD,
+                            nearby_shortcuts.len()
+                        );
+                        for (rank, (saving, approach, start, landing, landing_distance)) in
+                            nearby_shortcuts.iter().enumerate()
+                        {
+                            let jump_length: i32 = chebyshev_distance(*start, *landing);
+                            let line_color: u32 = if jump_length > 2 {
+                                COLOR_LONG_JUMP
+                            } else {
+                                COLOR_SHORT_JUMP
+                            };
+                            let _ = cambc::debug::draw_line(*start, *landing, line_color);
+                            let _ = cambc::debug::draw_dot(*start, COLOR_SHORTCUT_FROM);
+                            let _ = cambc::debug::draw_dot(*landing, COLOR_SHORTCUT_TO);
+                            if rank < SHORTCUT_PRINT_LIMIT {
+                                println!(
+                                    "  ({}, {}) -> ({}, {}) length {}, approach {}, landing distance {}, saving {}",
+                                    start.x, start.y, landing.x, landing.y,
+                                    jump_length, approach, landing_distance, saving
+                                );
+                            }
+                        }
+                    }
+                    (None, _) => println!("No distance field is available yet, so the champion waits this turn."),
+                    (_, None) => println!("The champion's position is not available."),
+                }
+            }
+        }
+    }
+}
+
+fn debug_idle(action: &Action) {
+    cambc::debug_block! {
+        debug_action_header("IDLE", action);
+        println!("The champion has no task. Intermediate actions have the lowest precedence, so any message or decision can preempt them.");
+        // TODO: print how many turns the champion has been idle and what it is waiting for
+    }
+}
+
+fn debug_collecting_from_camp(action: &Action, _memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("COLLECTING FROM CAMP", action);
+        println!("Farm group action: the champion collects what a cleared camp group dropped.");
+        println!("Not implemented yet.");
+        // TODO: print the camp group, gems and gold collected so far, and the respawn timer
+        // TODO: draw a ring around the camp group centre and a line from the champion
+    }
+}
+
+fn debug_in_champion_combat_kill(action: &Action, _memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("IN CHAMPION COMBAT (KILL)", action);
+        println!("Champion combat action: the champion is committing to killing an enemy champion.");
+        println!("Not implemented yet.");
+        // TODO: print the enemy target, its last known health and the damage race
+        // TODO: draw a line from the champion to the target and the attack range
+    }
+}
+
+fn debug_in_champion_combat_stall(action: &Action, _memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("IN CHAMPION COMBAT (STALL)", action);
+        println!("Champion combat action: the champion is holding an enemy champion in place without committing to a kill.");
+        println!("Not implemented yet.");
+        // TODO: print what is being stalled and until when
+    }
+}
+
+fn debug_in_champion_combat_escape(action: &Action, _memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("IN CHAMPION COMBAT (ESCAPE)", action);
+        println!("Survival action: the champion is disengaging from an enemy champion.");
+        println!("Not implemented yet.");
+        // TODO: print the enemy being escaped and the chosen retreat point
+    }
+}
+
+fn debug_in_camp_group_combat(
+    action: &Action,
+    camp_group_id: CampGroupID,
+    memory: &ChampionMemory,
+) {
+    cambc::debug_block! {
+        debug_action_header("IN CAMP GROUP COMBAT", action);
+        println!("Farm group action: the champion is fighting the camps of one camp group.");
+        println!("Camp group: {:?} at {:?}", camp_group_id, memory.map.points_of_interest.camp_group_centers.get(camp_group_id.0).map(|point| (point.x, point.y)));
+        println!("Not implemented yet.");
+        // TODO: print the camp group hp, damage per round and the expected fight outcome
+        // TODO: draw a ring around the camp group centre
+    }
+}
+
+fn debug_tributing_at_altar(action: &Action, altar_id: AltarID, memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("TRIBUTING AT ALTAR", action);
+        println!("Farm group action: the champion is submitting gems at an altar.");
+        println!("Altar: {:?} at {:?}", altar_id, memory.map.points_of_interest.altar_locations.get(altar_id.0).map(|point| (point.x, point.y)));
+        println!("Not implemented yet.");
+        // TODO: print gems held and the remaining channel time
+        // TODO: draw a ring around the altar
+    }
+}
+
+fn debug_defend_location(action: &Action, location_id: LocationID, memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("DEFEND LOCATION", action);
+        println!("Support group action: the champion is guarding a location.");
+        println!("Location: {:?} at {:?}", location_id, safe_locate(memory, location_id).map(|point| (point.x, point.y)));
+        println!("Not implemented yet.");
+        // TODO: print the threats near the location and draw a ring around it
+    }
+}
+
+fn debug_escape_to_spawn(action: &Action, _memory: &ChampionMemory) {
+    cambc::debug_block! {
+        debug_action_header("ESCAPE TO SPAWN", action);
+        println!("Survival action: the champion is retreating to the spawn region.");
+        println!("Not implemented yet.");
+        // TODO: print the recall state and the distance to the spawn region
+    }
+}
+
+pub fn print_action_queue(memory: &ChampionMemory) {
+    cambc::debug_block! {
+        println!("== ACTION QUEUE ==");
+        println!("Queued actions are processed in order. Each action's precedence indicates its action group.");
+        println!("Queue length: {}", memory.action_state.action_queue.len());
+        println!("Last bastion: {:?}", memory.action_state.last_bastion);
+
+        if memory.action_state.action_queue.is_empty() {
+            println!("  (empty)");
+        }
+
+        for (index, action) in memory.action_state.action_queue.iter().enumerate() {
+            println!(
+                "  [{:>2}] precedence {:>2} | {:?}",
+                index,
+                action.precedence(),
+                action
+            );
+        }
+    }
+}
+
 pub fn post_fuel(label: &str) {
     cambc::debug_block! {
         println!("{label}: {:?}", cambc::fuel_remaining());
@@ -746,7 +1112,41 @@ pub fn debug_champion_turn(memory: &ChampionMemory) {
     print_distance_fields(memory);
     print_champion_info(memory);
     print_message_board(memory);
+    print_action_queue(memory);
 
     draw_sent_messages(memory);
     draw_points_of_interest(memory);
+}
+
+pub fn debug_current_action(action: &Action, memory: &ChampionMemory) {
+    match action {
+        Action::Idle => debug_idle(action),
+        Action::MoveToLocation {
+            distance_field,
+            location_id,
+            accepted_distance,
+            action_group_type,
+        } => debug_move_to_location(
+            action,
+            distance_field,
+            *location_id,
+            *accepted_distance,
+            *action_group_type,
+            memory,
+        ),
+        Action::CollectingFromCamp { .. } => debug_collecting_from_camp(action, memory),
+        Action::InChampionComabtKill { .. } => debug_in_champion_combat_kill(action, memory),
+        Action::InChampionCombatStall { .. } => debug_in_champion_combat_stall(action, memory),
+        Action::InChampionCombatEscape { .. } => debug_in_champion_combat_escape(action, memory),
+        Action::InCampGroupCombat { camp_group_id } => {
+            debug_in_camp_group_combat(action, *camp_group_id, memory)
+        }
+        Action::TributingAtAltar { altar_id } => {
+            debug_tributing_at_altar(action, *altar_id, memory)
+        }
+        Action::DefendLocation { location_id } => {
+            debug_defend_location(action, *location_id, memory)
+        }
+        Action::EscapeToSpawn => debug_escape_to_spawn(action, memory),
+    }
 }
