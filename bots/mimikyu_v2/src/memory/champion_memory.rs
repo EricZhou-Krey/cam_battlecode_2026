@@ -4,6 +4,7 @@ use crate::{
         champion_info::AllChampionInfo,
         lazy_map::LazyMap,
         message::{message_board::MessageBoard, messages::Message},
+        AltarID,
     },
 };
 
@@ -12,6 +13,8 @@ pub struct ChampionMemory {
     pub map: LazyMap,
     pub champion_info: AllChampionInfo,
     pub message_board: MessageBoard,
+
+    pub last_bastion: Option<AltarID>,
 }
 
 impl ChampionMemory {
@@ -22,12 +25,18 @@ impl ChampionMemory {
             map: LazyMap::new(&draft_memory),
             champion_info: AllChampionInfo::new(),
             message_board: MessageBoard::new(),
+
+            last_bastion: None,
         }
     }
 
     pub fn update_by_status_messgges(&mut self) {
         for received_message in &self.message_board.inbox {
             match received_message.message {
+                Message::FarmClear { camp_group_id } => {
+                    self.map.camp_group_respawn_timer[camp_group_id.0] =
+                        self.map.camp_group_reset_timer[camp_group_id.0];
+                }
                 Message::StatusAllyHealth {
                     ally_champion_id,
                     current_health_in_hundreds,
@@ -78,7 +87,7 @@ impl ChampionMemory {
                         .ally
                         .entry(ally_champion_id)
                         .and_modify(|champion_info| {
-                            champion_info.gems_held = Some(gems_held_tens as u32 * 10)
+                            champion_info.gems_held = Some(gems_held_tens * 10)
                         });
                 }
                 Message::StatusEnemyGemsHeld {
@@ -89,15 +98,14 @@ impl ChampionMemory {
                         .enemy
                         .entry(enemy_champion_id)
                         .and_modify(|champion_info| {
-                            champion_info.gems_held = Some(gems_held_tens as u32 * 10)
+                            champion_info.gems_held = Some(gems_held_tens * 10)
                         });
+                }
+                Message::EndgameAltarProtect { altar_id } => {
+                    self.last_bastion = Some(altar_id);
                 }
                 _ => (),
             }
         }
-    }
-
-    pub fn update_by_visible(&mut self) {
-        // TODO
     }
 }

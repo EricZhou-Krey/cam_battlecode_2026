@@ -4,6 +4,14 @@ pub mod lazy_map;
 pub mod message;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StatID {
+    #[default]
+    Health,
+    Strength,
+    Focus,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CampGroupID(pub usize);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]

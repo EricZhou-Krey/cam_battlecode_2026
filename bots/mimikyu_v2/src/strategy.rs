@@ -42,7 +42,6 @@ impl Strategy {
                     champion_memory.map.distance_fields.reset_discovered_state();
                     champion_memory.map.tick_camp_group_respawn_timers();
                     champion_memory.message_board.sync();
-
                     champion_memory.update_by_status_messgges();
 
                     current_action.turn(&mut champion_memory);

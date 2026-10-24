@@ -324,13 +324,14 @@ impl Message {
                 }
             }
             Self::CombatLosingFightNeedHelp { ally_champion, .. }
-            | Self::CombatWinningFightWantHelp { ally_champion, .. } => {
-                if ally_champion.is_none() {
-                    *ally_champion = Some(responder);
-                    true
-                } else {
-                    false
-                }
+            | Self::CombatWinningFightWantHelp { ally_champion, .. }
+                if ally_champion.is_none() =>
+            {
+                *ally_champion = Some(responder);
+                true
+            }
+            Self::CombatLosingFightNeedHelp { .. } | Self::CombatWinningFightWantHelp { .. } => {
+                false
             }
             _ => false,
         }
