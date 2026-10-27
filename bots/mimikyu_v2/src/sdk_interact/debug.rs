@@ -363,6 +363,7 @@ pub fn print_camp_group_stats(memory: &ChampionMemory) {
                 map.camp_group_damage_per_round[camp_group_id],
                 map.camp_group_gem_value[camp_group_id],
                 map.camp_group_gold_value[camp_group_id],
+                map.camp_group_attack_order[camp_group_id],
             );
         }
     }

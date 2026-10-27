@@ -5,6 +5,7 @@ use crate::memory::{
 };
 use cambc::{CampType, ChampionType};
 
+#[repr(usize)]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub enum CampTypeAttackOrder {
     Monolith,

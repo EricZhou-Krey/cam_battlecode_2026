@@ -1,9 +1,10 @@
 use crate::{
+    action::combat::CampTypeAttackOrder,
     draft::draft_memory::DraftMemory,
-    memory::{AltarID, CampGroupID, ControlPointID, LocationID, ShortcutID},
+    memory::{AltarID, CampGroupID, CampID, ControlPointID, LocationID, ShortcutID},
     sdk_interact::map::{chebyshev_distance, Center},
 };
-use cambc::{Bitboard, DistanceField, Vec2};
+use cambc::{map::camp, Bitboard, Camp, DistanceField, Vec2};
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +25,7 @@ impl LazyDistanceFields {
             .take(draft_memory.camp_memory.camp_group_count as usize)
             .map(|byte| CampGroupID(byte as usize))
             .collect();
+
         let camp_group_distance_fields: Vec<Option<DistanceField>> =
             vec![None; draft_memory.camp_memory.camp_group_count as usize];
         let blocked_bitboard: Bitboard = cambc::map::walls()
@@ -179,6 +181,7 @@ pub struct LazyMap {
     pub distance_fields: LazyDistanceFields,
 
     // Indexed by CampGroupID.0
+    pub camp_group_attack_order: Vec<Vec<CampID>>,
     pub camp_group_reset_timer: Vec<i32>,
     pub camp_group_respawn_timer: Vec<i32>,
     pub camp_group_effective_hp: Vec<f32>,
@@ -206,6 +209,18 @@ impl LazyMap {
             })
             .collect();
         let distance_fields: LazyDistanceFields = LazyDistanceFields::new(draft_memory);
+        let camp_group_attack_order: Vec<Vec<CampID>> = cambc::map::camp_groups()
+            .unwrap()
+            .iter()
+            .map(|camp_group| {
+                let camps: &[Camp] = camp_group.camps();
+                let n_camps: usize = camps.len();
+                let camp_ids: Vec<CampID> = (0..n).map(CampID).collect();
+                camp_ids.sort_unstable_by_key(|camp_id| {
+                    CampTypeAttackOrder::from(camps[camp_id.0].kind())
+                });
+            })
+            .collect();
         let camp_group_reset_timer: Vec<i32> = cambc::map::camp_groups()
             .unwrap()
             .into_iter()
@@ -274,6 +289,7 @@ impl LazyMap {
         Self {
             distance_fields,
 
+            camp_group_attack_order,
             camp_group_reset_timer,
             camp_group_respawn_timer,
             camp_group_effective_hp,
