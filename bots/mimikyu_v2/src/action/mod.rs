@@ -76,8 +76,17 @@ impl Action {
     }
 
     fn try_prempt_current_action(&mut self, champion_memory: &mut ChampionMemory) {
-        // Look at possbile actions and reactions and choose one with the highest precedence
+        // Note: interesting distance field try_get() "leak" attempted by message reaction even if
+        // current or other action is higher precedence, meaning better understand of the world for
+        // when the situation it is currently in resolves
         let message_reaction: Option<Self> = Self::message_reaction(champion_memory);
+
+        // Should attempt to prempt when:
+        //  - Combat range/ Champion visible
+        //  - Low hp/need to escape and heal
+        //  - Reaction to messages
+
+        // for signal in current
 
         todo!()
     }

@@ -125,17 +125,17 @@ impl LazyDistanceFields {
             LocationID::CampGroup(id) => points_of_interst.camp_group_spawn_tiles[id.0].clone(),
             LocationID::Altar(id) => {
                 let mut bitboard: Bitboard = Bitboard::new().unwrap();
-                bitboard.set(points_of_interst.altar_locations[id.0], true);
+                let _ = bitboard.set(points_of_interst.altar_locations[id.0], true);
                 bitboard
             }
             LocationID::Shortcut(id) => {
                 let mut bitboard: Bitboard = Bitboard::new().unwrap();
-                bitboard.set(points_of_interst.shortcut_points[id.0], true);
+                let _ = bitboard.set(points_of_interst.shortcut_points[id.0], true);
                 bitboard
             }
             LocationID::ControlPoint(id) => {
                 let mut bitboard: Bitboard = Bitboard::new().unwrap();
-                bitboard.set(points_of_interst.control_points[id.0], true);
+                let _ = bitboard.set(points_of_interst.control_points[id.0], true);
                 bitboard
             }
         };
@@ -183,16 +183,16 @@ impl LazyPointsOfInterest {
         let mut points_of_interest_bitboard: Bitboard = Bitboard::new().unwrap();
 
         for &point in &control_points {
-            points_of_interest_bitboard.set(point, true);
+            let _ = points_of_interest_bitboard.set(point, true);
         }
         for &point in &altar_locations {
-            points_of_interest_bitboard.set(point, true);
+            let _ = points_of_interest_bitboard.set(point, true);
         }
         for &point in shortcuts.keys() {
-            points_of_interest_bitboard.set(point, true);
+            let _ = points_of_interest_bitboard.set(point, true);
         }
         for &point in &camp_group_centers {
-            points_of_interest_bitboard.set(point, true);
+            let _ = points_of_interest_bitboard.set(point, true);
         }
 
         let closest_point_of_interest: HashMap<Vec2, Option<LocationID>> = HashMap::new();
