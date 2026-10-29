@@ -1,5 +1,7 @@
 use crate::{action::Action, memory::champion_memory::ChampionMemory};
 
+pub const COMBAT_PROXIMITY: u16 = 4;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChampionCombatState {}
 

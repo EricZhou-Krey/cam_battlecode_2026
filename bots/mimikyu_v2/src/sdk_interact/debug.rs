@@ -431,25 +431,15 @@ pub fn print_team_champion_info(
                 info.gems_held,
             );
             println!(
-                "      last seen: {}, going to: {}",
+                "      last seen: {}",
                 describe_location(memory, info.last_seen),
-                describe_location(memory, info.going_to),
             );
 
             let last_seen_point: Option<Vec2> = info
                 .last_seen
                 .map(|location_id| memory.map.points_of_interest.locate(location_id));
-            let going_to_point: Option<Vec2> = info
-                .going_to
-                .map(|location_id| memory.map.points_of_interest.locate(location_id));
-            match (last_seen_point, going_to_point) {
-                (Some(from), Some(to)) => {
-                    cambc::debug::draw_dot(from, color).unwrap();
-                    cambc::debug::draw_line(from, to, color).unwrap();
-                }
-                (Some(from), None) => cambc::debug::draw_dot(from, color).unwrap(),
-                (None, Some(to)) => cambc::debug::draw_dot(to, color).unwrap(),
-                (None, None) => (),
+            if let Some(from) = last_seen_point {
+                cambc::debug::draw_dot(from, color).unwrap();
             }
         }
     }

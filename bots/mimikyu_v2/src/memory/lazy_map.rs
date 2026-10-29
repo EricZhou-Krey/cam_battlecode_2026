@@ -4,13 +4,14 @@ use crate::{
     memory::{AltarID, CampGroupID, CampID, ControlPointID, LocationID, ShortcutID},
     sdk_interact::map::Center,
 };
-use cambc::{Bitboard, Camp, DistanceField, Vec2};
+use cambc::{Bitboard, Camp, DistanceField, Team, Vec2};
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LazyDistanceFields {
     pub discovery_queue: VecDeque<LocationID>,
 
+    pub spawn_distance_field: Option<DistanceField>,
     pub camp_group_distance_fields: Vec<Option<DistanceField>>,
     pub altar_distance_fields: Vec<Option<DistanceField>>,
     pub shortcut_point_distance_fields: Vec<Option<DistanceField>>,
@@ -61,6 +62,7 @@ impl LazyDistanceFields {
         Self {
             discovery_queue,
 
+            spawn_distance_field: None,
             camp_group_distance_fields,
             altar_distance_fields,
             shortcut_point_distance_fields,
@@ -73,6 +75,29 @@ impl LazyDistanceFields {
 
     pub fn reset_discovered_state(&mut self) {
         self.discovered_this_round = false;
+    }
+
+    pub fn try_get_spawn_distance_field(&mut self) -> Option<&DistanceField> {
+        let None: Option<&DistanceField> = self.spawn_distance_field.as_ref() else {
+            return self.spawn_distance_field.as_ref();
+        };
+        if self.discovered_this_round {
+            return self.spawn_distance_field.as_ref();
+        }
+
+        let mut distance_field: DistanceField = DistanceField::new().unwrap();
+        let origin_bitboard: &Bitboard = cambc::map::spawn_region(Team::Ally).unwrap();
+
+        let _ = distance_field.compute(
+            &self.blocked_bitboard,
+            origin_bitboard,
+            &mut Bitboard::new().unwrap(),
+            u16::MAX,
+        );
+
+        self.spawn_distance_field = Some(distance_field);
+        self.discovered_this_round = true;
+        self.spawn_distance_field.as_ref()
     }
 
     pub fn lazy_discover(&mut self, points_of_interst: &LazyPointsOfInterest) {
