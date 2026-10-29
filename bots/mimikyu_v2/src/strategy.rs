@@ -1,5 +1,5 @@
 use crate::{
-    action::{movement::MovementState, Action},
+    action::Action,
     draft::draft_memory::{DraftMemory, DraftMemoryBlock},
     memory::champion_memory::ChampionMemory,
     sdk_interact::debug::{debug_current_action, debug_draft_init},
@@ -38,22 +38,7 @@ impl Strategy {
                 let mut champion_memory: ChampionMemory = ChampionMemory::from_draft_bytes(
                     cambc::draft_memory().bytes().try_into().unwrap(),
                 );
-                //let mut current_action: Action = Action::Idle;
-
-                // --- DEBUG SETUP START ---
-                let mut current_action = Action::MoveToLocation(MovementState {
-                    next_action: Box::new(None),
-                    distance_field: None,
-                    location_id: Some(crate::memory::LocationID::CampGroup(
-                        champion_memory
-                            .map
-                            .distance_fields
-                            .camp_group_discovery_queue[0],
-                    )),
-                    accepted_distance: 3,
-                    action_group_type: crate::action::ActionGroupType::Intermediate,
-                });
-                // --- DEBUG SETUP END ---
+                let mut current_action: Action = Action::Idle;
 
                 loop {
                     champion_memory.map.distance_fields.reset_discovered_state();
@@ -66,7 +51,7 @@ impl Strategy {
                     champion_memory
                         .map
                         .distance_fields
-                        .lazy_discover_from_queue();
+                        .lazy_discover(&champion_memory.map.points_of_interest);
                     champion_memory.message_board.flush();
 
                     //debug_champion_turn(&champion_memory);

@@ -1,4 +1,4 @@
-use crate::action::{Action, ActionGroupType};
+use crate::action::Action;
 use crate::memory::message::messages::{Message, MessageType};
 use crate::sdk_interact::map::{chebyshev_distance, Center};
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     },
     memory::{champion_info::ChampionInfo, champion_memory::ChampionMemory, LocationID},
 };
-use cambc::{AbilityInfo, CampGroup, ChampionType, DistanceField, Team, Vec2};
+use cambc::{CampGroup, ChampionType, DistanceField, Team, Vec2};
 use std::collections::HashMap;
 
 const GREY: u32 = 0x808080;
@@ -22,7 +22,6 @@ const YELLOW: u32 = 0xFFFF00;
 const WHITE: u32 = 0xFFFFFF;
 const ORANGE: u32 = 0xFF8800;
 const LIGHT_GREEN: u32 = 0x66FF66;
-const DARK_GREEN: u32 = 0x33CC33;
 const PURPLE: u32 = 0xAA55FF;
 const MINT_GREEN: u32 = 0x00FF99;
 const RED: u32 = 0xFF3333;
@@ -38,12 +37,6 @@ const COLOR_CAMP_GROUP: u32 = LIGHT_GREEN;
 const COLOR_ALTAR: u32 = PURPLE;
 const COLOR_ALLY_CHAMPION: u32 = MINT_GREEN;
 const COLOR_ENEMY_CHAMPION: u32 = RED;
-const COLOR_ACTION_TARGET: u32 = WHITE;
-const COLOR_ACTION_SELF: u32 = MINT_GREEN;
-const COLOR_DASH_LANDING: u32 = YELLOW;
-const PATH_PREVIEW_STEPS: u32 = 12;
-const SHORTCUT_LOOKAHEAD: i32 = 8;
-const SHORTCUT_PRINT_LIMIT: usize = 6;
 
 const MIN_CIRCLE_RADIUS: f32 = 1.0;
 const LINES_TO_NEAREST_CAMPS: usize = 5;
@@ -295,46 +288,52 @@ pub fn print_champion_overview(memory: &ChampionMemory) {
     }
 }
 
+fn cached_field_ids(fields: &[Option<DistanceField>]) -> Vec<usize> {
+    fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.is_some())
+        .map(|(id, _)| id)
+        .collect()
+}
+
 pub fn print_distance_fields(memory: &ChampionMemory) {
     cambc::debug_block! {
         let distance_fields = &memory.map.distance_fields;
-        let cached_camp_ids: Vec<usize> = distance_fields
-            .camp_group_distance_fields
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| field.is_some())
-            .map(|(camp_group_id, _)| camp_group_id)
-            .collect();
-        let queue_preview: Vec<usize> = distance_fields
-            .camp_group_discovery_queue
+
+        let queue_preview: Vec<&LocationID> = distance_fields
+            .discovery_queue
             .iter()
             .take(QUEUE_PREVIEW_LENGTH)
-            .map(|camp_group_id| camp_group_id.0)
             .collect();
 
         println!("== CHAMPION MAP: DISTANCE FIELDS ==");
-        println!("Distance fields are computed lazily and cached. At most one new field is computed per round, and lazy_discover_from_queue works through the discovery queue nearest camp group first. A field that is not cached yet means no champion has asked for it and the queue has not reached it.");
-        println!(
-            "Camp group fields cached: {}/{} {:?}",
-            cached_camp_ids.len(),
-            distance_fields.camp_group_distance_fields.len(),
-            cached_camp_ids,
-        );
-        println!(
-            "Altar field: {}",
-            if distance_fields.altar_distance_field.is_some() {
-                "cached"
-            } else {
-                "not computed yet"
-            }
-        );
+        println!("Distance fields are computed lazily and cached, one per kind of location: camp groups, altars, shortcut points and control points. At most one new field is computed per round, either on demand by try_get or by lazy_discover, which works through the shared discovery queue in order (camp groups first, then altars, shortcuts, control points). A field that is not cached yet means nothing has asked for it and the queue has not reached it.");
+
+        let kinds: [(&str, &Vec<Option<DistanceField>>); 4] = [
+            ("Camp group", &distance_fields.camp_group_distance_fields),
+            ("Altar", &distance_fields.altar_distance_fields),
+            ("Shortcut point", &distance_fields.shortcut_point_distance_fields),
+            ("Control point", &distance_fields.control_point_distance_fields),
+        ];
+        for (name, fields) in kinds {
+            let cached = cached_field_ids(fields);
+            println!(
+                "{} fields cached: {}/{} {:?}",
+                name,
+                cached.len(),
+                fields.len(),
+                cached,
+            );
+        }
+
         println!(
             "Discovery queue: {} left, next {:?}",
-            distance_fields.camp_group_discovery_queue.len(),
+            distance_fields.discovery_queue.len(),
             queue_preview
         );
         println!(
-            "Discovered this round: {}, blocked tiles in mask: {}",
+            "Discovered this round: {}, blocked tiles in mask (walls, holes, altars): {}",
             distance_fields.discovered_this_round,
             distance_fields.blocked_bitboard.count().unwrap(),
         );
@@ -725,253 +724,6 @@ pub fn draw_sent_messages(memory: &ChampionMemory) {
         }
         for reply in &memory.message_board.responses {
             draw_message(memory, reply);
-        }
-    }
-}
-
-fn action_group_color(action_group_type: ActionGroupType) -> u32 {
-    match action_group_type {
-        ActionGroupType::Intermediate => GREY,
-        ActionGroupType::StartFarm => LIGHT_GREEN,
-        ActionGroupType::Support => BLUE,
-        ActionGroupType::EndFarm => DARK_GREEN,
-        ActionGroupType::ChampionCombat => RED,
-        ActionGroupType::Survival => ORANGE,
-    }
-}
-
-fn describe_distance(distance: Option<u16>) -> String {
-    match distance {
-        Some(u16::MAX) => String::from("unreached"),
-        Some(value) => value.to_string(),
-        None => String::from("unknown"),
-    }
-}
-
-fn debug_action_header(name: &str, action: &Action) {
-    println!(
-        "== CURRENT ACTION: {name} (precedence {}) ==",
-        action.precedence()
-    );
-}
-
-fn resolve_move_field<'a>(
-    distance_field: &'a Option<DistanceField>,
-    target_id: LocationID,
-    memory: &'a ChampionMemory,
-) -> (Option<&'a DistanceField>, &'static str) {
-    if let Some(field) = distance_field {
-        return (Some(field), "owned by the action");
-    }
-    if let LocationID::CampGroup(camp_group_id) = target_id {
-        if let Some(Some(field)) = memory
-            .map
-            .distance_fields
-            .camp_group_distance_fields
-            .get(camp_group_id.0)
-        {
-            return (Some(field), "shared lazy cache");
-        }
-    }
-    (None, "not computed yet")
-}
-
-fn debug_move_to_location(
-    action: &Action,
-    distance_field: &Option<DistanceField>,
-    location_id: Option<LocationID>,
-    accepted_distance: u16,
-    action_group_type: ActionGroupType,
-    memory: &ChampionMemory,
-) {
-    cambc::debug_block! {
-        let group_color: u32 = action_group_color(action_group_type);
-
-        debug_action_header("MOVE TO LOCATION", action);
-        println!("The champion walks to a location by always stepping to the neighbouring tile with the lowest distance field value. The field is rooted at the target, so each value is the number of steps still to walk, and the action ends when the value at the champion's tile is at most the accepted distance.");
-        println!("On the map: the champion is a mint dot, the target is a white dot with a ring of the accepted distance, and the line from the champion follows the field downhill for {PATH_PREVIEW_STEPS} steps, coloured by action group (grey intermediate, light green farm, blue support, red champion combat, orange survival). A yellow dot and line mark the best legal dash landing, and blue or pink lines mark shortcuts within {SHORTCUT_LOOKAHEAD} tiles.");
-        println!("Group: {:?}, accepted distance: {}", action_group_type, accepted_distance);
-
-        match location_id {
-            None => println!("No target location is set, so the action finishes as soon as it runs."),
-            Some(target_id) => {
-                let target: Option<Vec2> = safe_locate(memory, target_id);
-                let champion = cambc::self_champion().ok().flatten();
-                let position: Option<Vec2> = champion.and_then(|me| me.position().ok());
-                let (field, field_source): (Option<&DistanceField>, &str) =
-                    resolve_move_field(distance_field, target_id, memory);
-
-                println!(
-                    "Target: {:?} at {:?}",
-                    target_id,
-                    target.map(|point| (point.x, point.y))
-                );
-                println!("Distance field: {field_source}");
-
-                if let Some(target_point) = target {
-                    let _ = cambc::debug::draw_dot(target_point, COLOR_ACTION_TARGET);
-                    draw_circle(target_point, accepted_distance as f32, group_color);
-                }
-                if let Some(point) = position {
-                    let _ = cambc::debug::draw_dot(point, COLOR_ACTION_SELF);
-                }
-
-                match (field, position) {
-                    (Some(field), Some(point)) => {
-                        let current_distance: Option<u16> = field.get(point).ok();
-                        println!(
-                            "Position: ({}, {}), distance to target: {}",
-                            point.x,
-                            point.y,
-                            describe_distance(current_distance)
-                        );
-                        match current_distance {
-                            Some(u16::MAX) => println!("Status: the target cannot be walked to from here, so only a dash or teleport can help."),
-                            Some(distance) if distance <= accepted_distance => println!("Status: arrived, the action finishes on its next turn."),
-                            Some(_) => println!("Status: walking."),
-                            None => println!("Status: the position is outside the field."),
-                        }
-
-                        let mut path_tile: Vec2 = point;
-                        let mut path_steps: u32 = 0;
-
-                        while path_steps < PATH_PREVIEW_STEPS {
-                            match field.next_move_from(path_tile) {
-                                Ok(Some(next_tile)) => {
-                                    let from: Vec2 = position.unwrap() + path_tile;
-                                    let to: Vec2 = position.unwrap() + next_tile;
-
-                                    let _ = cambc::debug::draw_line(from, to, group_color);
-
-                                    path_tile = next_tile;
-                                    path_steps += 1;
-                                }
-                                _ => break,
-                            }
-                        }
-
-                        println!(
-                            "Path preview: {} steps, ends at ({}, {}) with distance {}",
-                            path_steps,
-                            path_tile.x + position.unwrap().x,
-                            path_tile.y + position.unwrap().y,
-                            describe_distance(field.get(path_tile).ok())
-                        );
-
-                        if let Some(me) = champion {
-                            let crystal_count: u32 = me
-                                .consumables()
-                                .iter()
-                                .filter(|consumable| {
-                                    matches!(consumable.kind(), cambc::ConsumableType::TpCrystal)
-                                })
-                                .map(|consumable| consumable.count().unwrap_or(0))
-                                .sum();
-                            println!("Teleport crystals held: {crystal_count}");
-
-                            for ability in me.abilities() {
-                                if !ability.is_dash() {
-                                    continue;
-                                }
-                                let dash_range: Option<f32> = match ability.info() {
-                                    Ok(Some(AbilityInfo::Dash(dash))) => Some(dash.range),
-                                    _ => None,
-                                };
-                                println!(
-                                    "Dash ability slot {}: ready {:?}, cooldown {:?}, range {:?}",
-                                    ability.slot(),
-                                    ability.is_ready(),
-                                    ability.cooldown(),
-                                    dash_range
-                                );
-
-                                let mut best_landing: Option<(u16, Vec2)> = None;
-                                if let Ok(landing_tiles) = ability.valid_tiles() {
-                                    if let Ok(landing_positions) = landing_tiles.positions() {
-                                        for landing in landing_positions {
-                                            let Ok(landing_distance) = field.get(landing) else {
-                                                continue;
-                                            };
-                                            if landing_distance == u16::MAX {
-                                                continue;
-                                            }
-                                            if best_landing.is_none_or(|(best_distance, _)| {
-                                                landing_distance < best_distance
-                                            }) {
-                                                best_landing = Some((landing_distance, landing));
-                                            }
-                                        }
-                                    }
-                                }
-                                match best_landing {
-                                    Some((landing_distance, landing)) => {
-                                        let gain: u16 = current_distance
-                                            .unwrap_or(u16::MAX)
-                                            .saturating_sub(landing_distance);
-                                        println!(
-                                            "  best landing ({}, {}) at distance {}, gain {}",
-                                            landing.x, landing.y, landing_distance, gain
-                                        );
-                                        let _ = cambc::debug::draw_line(point, landing, COLOR_DASH_LANDING);
-                                        let _ = cambc::debug::draw_dot(landing, COLOR_DASH_LANDING);
-                                    }
-                                    None => println!("  no legal landing tile with a known distance"),
-                                }
-                            }
-                        }
-
-                        let mut nearby_shortcuts: Vec<(u16, i32, Vec2, Vec2, u16)> = Vec::new();
-                        for (start, landing) in &memory.map.points_of_interest.shortcuts {
-                            let approach: i32 =
-                                (start.x - point.x).abs().max((start.y - point.y).abs());
-                            if approach > SHORTCUT_LOOKAHEAD {
-                                continue;
-                            }
-                            let Ok(landing_distance) = field.get(*landing) else {
-                                continue;
-                            };
-                            if landing_distance == u16::MAX {
-                                continue;
-                            }
-                            let saving: u16 = current_distance.unwrap_or(u16::MAX).saturating_sub(
-                                (approach as u16)
-                                    .saturating_add(1)
-                                    .saturating_add(landing_distance),
-                            );
-                            nearby_shortcuts.push((saving, approach, *start, *landing, landing_distance));
-                        }
-                        nearby_shortcuts.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
-
-                        println!(
-                            "Shortcuts within {} tiles: {} (estimated saving counts the approach as a straight walk and a jump cost of 1)",
-                            SHORTCUT_LOOKAHEAD,
-                            nearby_shortcuts.len()
-                        );
-                        for (rank, (saving, approach, start, landing, landing_distance)) in
-                            nearby_shortcuts.iter().enumerate()
-                        {
-                            let jump_length: i32 = chebyshev_distance(*start, *landing);
-                            let line_color: u32 = if jump_length > 2 {
-                                COLOR_LONG_JUMP
-                            } else {
-                                COLOR_SHORT_JUMP
-                            };
-                            let _ = cambc::debug::draw_line(*start, *landing, line_color);
-                            let _ = cambc::debug::draw_dot(*start, COLOR_SHORTCUT_FROM);
-                            let _ = cambc::debug::draw_dot(*landing, COLOR_SHORTCUT_TO);
-                            if rank < SHORTCUT_PRINT_LIMIT {
-                                println!(
-                                    "  ({}, {}) -> ({}, {}) length {}, approach {}, landing distance {}, saving {}",
-                                    start.x, start.y, landing.x, landing.y,
-                                    jump_length, approach, landing_distance, saving
-                                );
-                            }
-                        }
-                    }
-                    (None, _) => println!("No distance field is available yet, so the champion waits this turn."),
-                    (_, None) => println!("The champion's position is not available."),
-                }
-            }
         }
     }
 }

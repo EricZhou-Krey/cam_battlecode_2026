@@ -1,4 +1,4 @@
-use cambc::{ChampionType, Team};
+use cambc::{Ability, Champion, ChampionStats, ChampionType, Team};
 use std::collections::HashMap;
 
 use crate::memory::LocationID;
@@ -17,6 +17,8 @@ pub struct ChampionInfo {
 pub struct AllChampionInfo {
     pub ally: HashMap<ChampionType, ChampionInfo>,
     pub enemy: HashMap<ChampionType, ChampionInfo>,
+
+    pub updated: Vec<(Team, ChampionType)>,
 }
 
 impl Default for AllChampionInfo {
@@ -56,6 +58,34 @@ impl AllChampionInfo {
         let ally: HashMap<ChampionType, ChampionInfo> = init_champion_info(Team::Ally);
         let enemy: HashMap<ChampionType, ChampionInfo> = init_champion_info(Team::Enemy);
 
-        Self { ally, enemy }
+        Self {
+            ally,
+            enemy,
+            updated: Vec::new(),
+        }
+    }
+
+    pub fn update_by_visible_champions(&mut self) {
+        self.updated.clear();
+        let ally_visible_champions: Vec<Champion> =
+            cambc::vision::champions(Some(Team::Ally)).unwrap();
+        let enemy_visible_champions: Vec<Champion> =
+            cambc::vision::champions(Some(Team::Enemy)).unwrap();
+
+        for ally_champion in ally_visible_champions {
+            let ally_champion_type: ChampionType = ally_champion.champion_name().unwrap();
+            self.ally.entry(ally_champion_type).and_modify(|ally_info| {
+                ally_info.current_hp = Some(ally_champion.health().unwrap());
+                ally_info.current_cooldowns = ally_champion
+                    .abilities()
+                    .clone()
+                    .map(|ability: Ability| ability.cooldown().unwrap());
+                // let base_states: ChampionStats = ally_champion.base_stats().unwrap();
+                // ally_info.current_stats = ...
+                ally_info.gems_held = Some(ally_champion.gem_count().unwrap());
+                // ally_info.last_seen = ...
+                // ally_info.going_to = ...
+            });
+        }
     }
 }
