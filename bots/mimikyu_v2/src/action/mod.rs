@@ -6,8 +6,8 @@ use crate::{
         shop::ActionBuyExtension,
     },
     memory::{champion_memory::ChampionMemory, message::messages::Message, LocationID},
-    sdk_interact::map::chebyshev_distance,
 };
+use cambc::{DistanceField, Vec2};
 
 pub mod combat;
 pub mod farm;
@@ -76,6 +76,7 @@ impl Action {
     }
 
     fn try_prempt_current_action(&mut self, champion_memory: &mut ChampionMemory) {
+        // Look at possbile actions and reactions and choose one with the highest precedence
         let message_reaction: Option<Self> = Self::message_reaction(champion_memory);
 
         todo!()
@@ -100,9 +101,12 @@ impl Action {
     }
 
     fn message_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
-        champion_memory.message_board.inbox.iter().fold(
-            None,
-            |highest_precedence_message_action, received_message| match &received_message.message {
+        let me_position: Vec2 = cambc::self_champion().unwrap().unwrap().position().unwrap();
+        let mut max_precedence: i32 = i32::MIN;
+        let mut reaction: Option<Self> = None;
+
+        for received_message in champion_memory.message_board.inbox.iter() {
+            match &received_message.message {
                 Message::FarmGoingToCamp { .. }
                 | Message::FarmClear { .. }
                 | Message::StatusAllyHealth { .. }
@@ -110,238 +114,213 @@ impl Action {
                 | Message::StatusAllyLocation { .. }
                 | Message::StatusEnemyLocation { .. }
                 | Message::StatusAllyGemsHeld { .. }
-                | Message::StatusEnemyGemsHeld { .. } => highest_precedence_message_action,
+                | Message::StatusEnemyGemsHeld { .. } => (),
 
                 Message::FarmHelp {
                     camp_group_id,
                     signal_strength,
                     ally_champions_helping: _,
                 } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::StartFarm as i32
-                        && chebyshev_distance(
-                            champion_memory.map.points_of_interest.camp_group_centers
-                                [camp_group_id.0],
-                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
-                        ) <= *signal_strength as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(Some(Self::InCampGroupCombat(
-                                CampGroupCombatState {
-                                    camp_group_id: *camp_group_id,
-                                    current_target_camp: 0,
-                                },
-                            ))),
-                            distance_field: champion_memory
-                                .map
-                                .distance_fields
-                                .try_get(*camp_group_id)
-                                .cloned(),
-                            location_id: Some(LocationID::CampGroup(*camp_group_id)),
-                            accepted_distance: MOVE_PROXIMITY,
-                            action_group_type: ActionGroupType::StartFarm,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::StartFarm as i32 {
+                        continue;
                     }
+                    let location_id: LocationID = LocationID::CampGroup(*camp_group_id);
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let distance: u16 = distance_field.get(me_position).unwrap();
+                    if *signal_strength < distance {
+                        continue;
+                    }
+
+                    max_precedence = ActionGroupType::StartFarm as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(Some(Self::InCampGroupCombat(
+                            CampGroupCombatState {
+                                camp_group_id: *camp_group_id,
+                                current_target_camp: 0,
+                            },
+                        ))),
+                        distance_field,
+                        location_id,
+                        accepted_distance: MOVE_PROXIMITY,
+                        action_group_type: ActionGroupType::StartFarm,
+                    }))
                 }
                 Message::FarmCollection {
                     camp_group_id,
                     ally_champion_claiming: _,
                 } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::EndFarm as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(Some(Self::CollectingFromCamp(
-                                CollectionState {},
-                            ))),
-                            distance_field: champion_memory
-                                .map
-                                .distance_fields
-                                .try_get(*camp_group_id)
-                                .cloned(),
-                            location_id: Some(LocationID::CampGroup(*camp_group_id)),
-                            accepted_distance: 0,
-                            action_group_type: ActionGroupType::EndFarm,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::EndFarm as i32 {
+                        continue;
                     }
-                }
+                    let location_id: LocationID = LocationID::CampGroup(*camp_group_id);
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
 
+                    max_precedence = ActionGroupType::EndFarm as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(Some(Self::CollectingFromCamp(CollectionState {}))),
+                        distance_field,
+                        location_id,
+                        accepted_distance: 0,
+                        action_group_type: ActionGroupType::EndFarm,
+                    }))
+                }
                 Message::CombatHeal {
                     location_id,
                     signal_strength,
                 } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::Support as i32
-                        && chebyshev_distance(
-                            champion_memory.map.points_of_interest.locate(*location_id),
-                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
-                        ) <= *signal_strength as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(Some(Self::CollectingFromCamp(
-                                CollectionState {},
-                            ))),
-                            distance_field: if let LocationID::CampGroup(camp_group_id) =
-                                location_id
-                            {
-                                champion_memory
-                                    .map
-                                    .distance_fields
-                                    .try_get(*camp_group_id)
-                                    .cloned()
-                            } else {
-                                None
-                            },
-                            location_id: Some(*location_id),
-                            accepted_distance: MOVE_PROXIMITY,
-                            action_group_type: ActionGroupType::Support,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::Support as i32 {
+                        continue;
                     }
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(*location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let distance: u16 = distance_field.get(me_position).unwrap();
+                    if *signal_strength < distance {
+                        continue;
+                    }
+
+                    max_precedence = ActionGroupType::Support as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(Some(Self::CollectingFromCamp(CollectionState {}))),
+                        distance_field,
+                        location_id: *location_id,
+                        accepted_distance: MOVE_PROXIMITY,
+                        action_group_type: ActionGroupType::Support,
+                    }));
                 }
                 Message::CombatLosingFightNeedHelp {
                     location_id,
                     signal_strength,
                     ally_champion: _,
                 } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::Support as i32
-                        && chebyshev_distance(
-                            champion_memory.map.points_of_interest.locate(*location_id),
-                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
-                        ) <= *signal_strength as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(None),
-                            distance_field: if let LocationID::CampGroup(camp_group_id) =
-                                location_id
-                            {
-                                champion_memory
-                                    .map
-                                    .distance_fields
-                                    .try_get(*camp_group_id)
-                                    .cloned()
-                            } else {
-                                None
-                            },
-                            location_id: Some(*location_id),
-                            accepted_distance: MOVE_PROXIMITY,
-                            action_group_type: ActionGroupType::Support,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::Support as i32 {
+                        continue;
                     }
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(*location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let distance: u16 = distance_field.get(me_position).unwrap();
+                    if *signal_strength < distance {
+                        continue;
+                    }
+
+                    max_precedence = ActionGroupType::Support as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(None),
+                        distance_field,
+                        location_id: *location_id,
+                        accepted_distance: MOVE_PROXIMITY,
+                        action_group_type: ActionGroupType::Support,
+                    }));
                 }
                 Message::CombatWinningFightWantHelp {
                     location_id,
                     signal_strength,
                     ally_champion: _,
                 } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::Support as i32
-                        && chebyshev_distance(
-                            champion_memory.map.points_of_interest.locate(*location_id),
-                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
-                        ) <= *signal_strength as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(None),
-                            distance_field: if let LocationID::CampGroup(camp_group_id) =
-                                location_id
-                            {
-                                champion_memory
-                                    .map
-                                    .distance_fields
-                                    .try_get(*camp_group_id)
-                                    .cloned()
-                            } else {
-                                None
-                            },
-                            location_id: Some(*location_id),
-                            accepted_distance: MOVE_PROXIMITY,
-                            action_group_type: ActionGroupType::Support,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::Support as i32 {
+                        continue;
                     }
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(*location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let distance: u16 = distance_field.get(me_position).unwrap();
+                    if *signal_strength < distance {
+                        continue;
+                    }
+
+                    max_precedence = ActionGroupType::Support as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(None),
+                        distance_field,
+                        location_id: *location_id,
+                        accepted_distance: MOVE_PROXIMITY,
+                        action_group_type: ActionGroupType::Support,
+                    }))
                 }
                 Message::CombatTargetEnemy {
                     location_id,
                     signal_strength,
                 } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::Support as i32
-                        && chebyshev_distance(
-                            champion_memory.map.points_of_interest.locate(*location_id),
-                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
-                        ) <= *signal_strength as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(None),
-                            distance_field: if let LocationID::CampGroup(camp_group_id) =
-                                location_id
-                            {
-                                champion_memory
-                                    .map
-                                    .distance_fields
-                                    .try_get(*camp_group_id)
-                                    .cloned()
-                            } else {
-                                None
-                            },
-                            location_id: Some(*location_id),
-                            accepted_distance: MOVE_PROXIMITY,
-                            action_group_type: ActionGroupType::Support,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::Support as i32 {
+                        continue;
                     }
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(*location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let distance: u16 = distance_field.get(me_position).unwrap();
+                    if *signal_strength < distance {
+                        continue;
+                    }
+
+                    max_precedence = ActionGroupType::Support as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(None),
+                        distance_field,
+                        location_id: *location_id,
+                        accepted_distance: MOVE_PROXIMITY,
+                        action_group_type: ActionGroupType::Support,
+                    }));
                 }
                 Message::GroupTogether { location_id } => {
-                    if highest_precedence_message_action
-                        .as_ref()
-                        .map_or(0, |action| action.precedence())
-                        < ActionGroupType::Support as i32
-                    {
-                        Some(Self::MoveToLocation(MovementState {
-                            next_action: Box::new(None),
-                            distance_field: if let LocationID::CampGroup(camp_group_id) =
-                                location_id
-                            {
-                                champion_memory
-                                    .map
-                                    .distance_fields
-                                    .try_get(*camp_group_id)
-                                    .cloned()
-                            } else {
-                                None
-                            },
-                            location_id: Some(*location_id),
-                            accepted_distance: MOVE_PROXIMITY,
-                            action_group_type: ActionGroupType::Support,
-                        }))
-                    } else {
-                        highest_precedence_message_action
+                    if max_precedence > ActionGroupType::StartFarm as i32 {
+                        continue;
                     }
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(*location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+
+                    max_precedence = ActionGroupType::Support as i32;
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(None),
+                        distance_field,
+                        location_id: *location_id,
+                        accepted_distance: MOVE_PROXIMITY,
+                        action_group_type: ActionGroupType::Support,
+                    }))
                 }
-            },
-        )
+            }
+        }
+
+        reaction
     }
 }
