@@ -9,10 +9,7 @@ use crate::{
         },
         draft_memory::{DraftMemory, DraftMemoryBlock, DRAFT_MEMORY_BYTE_SIZE},
     },
-    memory::{
-        champion_info::ChampionInfo, champion_memory::ChampionMemory, AltarID, CampGroupID,
-        LocationID,
-    },
+    memory::{champion_info::ChampionInfo, champion_memory::ChampionMemory, LocationID},
 };
 use cambc::{AbilityInfo, CampGroup, ChampionType, DistanceField, Team, Vec2};
 use std::collections::HashMap;
@@ -25,6 +22,7 @@ const YELLOW: u32 = 0xFFFF00;
 const WHITE: u32 = 0xFFFFFF;
 const ORANGE: u32 = 0xFF8800;
 const LIGHT_GREEN: u32 = 0x66FF66;
+const DARK_GREEN: u32 = 0x33CC33;
 const PURPLE: u32 = 0xAA55FF;
 const MINT_GREEN: u32 = 0x00FF99;
 const RED: u32 = 0xFF3333;
@@ -354,7 +352,7 @@ pub fn print_camp_group_stats(memory: &ChampionMemory) {
         for camp_group_id in 0..map.camp_group_count {
             let center: Vec2 = map.points_of_interest.camp_group_centers[camp_group_id];
             println!(
-                "  {:>2}: ({}, {}) respawn {} hp {} dmg {} gem {} gold {}",
+                "  {:>2}: ({}, {}) respawn {} hp {} dmg {} gem {} gold {} attack_order {:?}",
                 camp_group_id,
                 center.x,
                 center.y,
@@ -513,9 +511,6 @@ fn message_location(memory: &ChampionMemory, message: &Message) -> Option<Vec2> 
         | Message::StatusAllyLocation { location_id, .. }
         | Message::StatusEnemyLocation { location_id, .. }
         | Message::GroupTogether { location_id } => safe_locate(memory, *location_id),
-        Message::EndgameAltarProtect { altar_id } => {
-            points_of_interest.altar_locations.get(altar_id.0).copied()
-        }
         _ => None,
     }
 }
@@ -572,7 +567,6 @@ fn draw_message(memory: &ChampionMemory, message: &Message) {
                 Message::StatusAllyLocation { .. } => draw_circle(center, 2.0, LIGHT_GREEN),
                 Message::StatusEnemyLocation { .. } => draw_circle(center, 2.0, LIGHT_RED),
                 Message::GroupTogether { .. } => draw_circle(center, 15.0, PURPLE),
-                Message::EndgameAltarProtect { .. } => draw_circle(center, 15.0, PURPLE),
                 _ => (),
             }
 
@@ -738,8 +732,9 @@ pub fn draw_sent_messages(memory: &ChampionMemory) {
 fn action_group_color(action_group_type: ActionGroupType) -> u32 {
     match action_group_type {
         ActionGroupType::Intermediate => GREY,
-        ActionGroupType::Farm => LIGHT_GREEN,
+        ActionGroupType::StartFarm => LIGHT_GREEN,
         ActionGroupType::Support => BLUE,
+        ActionGroupType::EndFarm => DARK_GREEN,
         ActionGroupType::ChampionCombat => RED,
         ActionGroupType::Survival => ORANGE,
     }
@@ -981,119 +976,6 @@ fn debug_move_to_location(
     }
 }
 
-fn debug_idle(action: &Action) {
-    cambc::debug_block! {
-        debug_action_header("IDLE", action);
-        println!("The champion has no task. Intermediate actions have the lowest precedence, so any message or decision can preempt them.");
-        // TODO: print how many turns the champion has been idle and what it is waiting for
-    }
-}
-
-fn debug_collecting_from_camp(action: &Action, _memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("COLLECTING FROM CAMP", action);
-        println!("Farm group action: the champion collects what a cleared camp group dropped.");
-        println!("Not implemented yet.");
-        // TODO: print the camp group, gems and gold collected so far, and the respawn timer
-        // TODO: draw a ring around the camp group centre and a line from the champion
-    }
-}
-
-fn debug_in_champion_combat_kill(action: &Action, _memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("IN CHAMPION COMBAT (KILL)", action);
-        println!("Champion combat action: the champion is committing to killing an enemy champion.");
-        println!("Not implemented yet.");
-        // TODO: print the enemy target, its last known health and the damage race
-        // TODO: draw a line from the champion to the target and the attack range
-    }
-}
-
-fn debug_in_champion_combat_stall(action: &Action, _memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("IN CHAMPION COMBAT (STALL)", action);
-        println!("Champion combat action: the champion is holding an enemy champion in place without committing to a kill.");
-        println!("Not implemented yet.");
-        // TODO: print what is being stalled and until when
-    }
-}
-
-fn debug_in_champion_combat_escape(action: &Action, _memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("IN CHAMPION COMBAT (ESCAPE)", action);
-        println!("Survival action: the champion is disengaging from an enemy champion.");
-        println!("Not implemented yet.");
-        // TODO: print the enemy being escaped and the chosen retreat point
-    }
-}
-
-fn debug_in_camp_group_combat(
-    action: &Action,
-    camp_group_id: CampGroupID,
-    memory: &ChampionMemory,
-) {
-    cambc::debug_block! {
-        debug_action_header("IN CAMP GROUP COMBAT", action);
-        println!("Farm group action: the champion is fighting the camps of one camp group.");
-        println!("Camp group: {:?} at {:?}", camp_group_id, memory.map.points_of_interest.camp_group_centers.get(camp_group_id.0).map(|point| (point.x, point.y)));
-        println!("Not implemented yet.");
-        // TODO: print the camp group hp, damage per round and the expected fight outcome
-        // TODO: draw a ring around the camp group centre
-    }
-}
-
-fn debug_tributing_at_altar(action: &Action, altar_id: AltarID, memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("TRIBUTING AT ALTAR", action);
-        println!("Farm group action: the champion is submitting gems at an altar.");
-        println!("Altar: {:?} at {:?}", altar_id, memory.map.points_of_interest.altar_locations.get(altar_id.0).map(|point| (point.x, point.y)));
-        println!("Not implemented yet.");
-        // TODO: print gems held and the remaining channel time
-        // TODO: draw a ring around the altar
-    }
-}
-
-fn debug_defend_location(action: &Action, location_id: LocationID, memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("DEFEND LOCATION", action);
-        println!("Support group action: the champion is guarding a location.");
-        println!("Location: {:?} at {:?}", location_id, safe_locate(memory, location_id).map(|point| (point.x, point.y)));
-        println!("Not implemented yet.");
-        // TODO: print the threats near the location and draw a ring around it
-    }
-}
-
-fn debug_escape_to_spawn(action: &Action, _memory: &ChampionMemory) {
-    cambc::debug_block! {
-        debug_action_header("ESCAPE TO SPAWN", action);
-        println!("Survival action: the champion is retreating to the spawn region.");
-        println!("Not implemented yet.");
-        // TODO: print the recall state and the distance to the spawn region
-    }
-}
-
-pub fn print_action_queue(memory: &ChampionMemory) {
-    cambc::debug_block! {
-        println!("== ACTION QUEUE ==");
-        println!("Queued actions are processed in order. Each action's precedence indicates its action group.");
-        println!("Queue length: {}", memory.action_state.action_queue.len());
-        println!("Last bastion: {:?}", memory.action_state.last_bastion);
-
-        if memory.action_state.action_queue.is_empty() {
-            println!("  (empty)");
-        }
-
-        for (index, action) in memory.action_state.action_queue.iter().enumerate() {
-            println!(
-                "  [{:>2}] precedence {:>2} | {:?}",
-                index,
-                action.precedence(),
-                action
-            );
-        }
-    }
-}
-
 pub fn post_fuel(label: &str) {
     cambc::debug_block! {
         println!("{label}: {:?}", cambc::fuel_remaining());
@@ -1113,7 +995,6 @@ pub fn debug_champion_turn(memory: &ChampionMemory) {
     print_distance_fields(memory);
     print_champion_info(memory);
     print_message_board(memory);
-    print_action_queue(memory);
 
     draw_sent_messages(memory);
     draw_points_of_interest(memory);
@@ -1121,33 +1002,15 @@ pub fn debug_champion_turn(memory: &ChampionMemory) {
 
 pub fn debug_current_action(action: &Action, memory: &ChampionMemory) {
     match action {
-        Action::Idle => debug_idle(action),
-        Action::MoveToLocation {
-            distance_field,
-            location_id,
-            accepted_distance,
-            action_group_type,
-        } => debug_move_to_location(
-            action,
-            distance_field,
-            *location_id,
-            *accepted_distance,
-            *action_group_type,
-            memory,
-        ),
-        Action::CollectingFromCamp { .. } => debug_collecting_from_camp(action, memory),
-        Action::InChampionComabtKill { .. } => debug_in_champion_combat_kill(action, memory),
-        Action::InChampionCombatStall { .. } => debug_in_champion_combat_stall(action, memory),
-        Action::InChampionCombatEscape { .. } => debug_in_champion_combat_escape(action, memory),
-        Action::InCampGroupCombat { camp_group_id } => {
-            debug_in_camp_group_combat(action, *camp_group_id, memory)
-        }
-        Action::TributingAtAltar { altar_id } => {
-            debug_tributing_at_altar(action, *altar_id, memory)
-        }
-        Action::DefendLocation { location_id } => {
-            debug_defend_location(action, *location_id, memory)
-        }
-        Action::EscapeToSpawn => debug_escape_to_spawn(action, memory),
+        Action::Idle => (),
+        Action::MoveToLocation { .. } => (),
+        Action::CollectingFromCamp { .. } => (),
+        Action::InChampionComabtKill { .. } => (),
+        Action::InChampionCombatStall { .. } => (),
+        Action::InChampionCombatEscape { .. } => (),
+        Action::InCampGroupCombat { .. } => (),
+        Action::TributingAtAltar { .. } => (),
+        Action::DefendLocation { .. } => (),
+        Action::EscapeToSpawn { .. } => (),
     }
 }

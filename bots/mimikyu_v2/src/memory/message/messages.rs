@@ -1,4 +1,4 @@
-use crate::memory::{AltarID, CampGroupID, LocationID};
+use crate::memory::{CampGroupID, LocationID};
 use cambc::ChampionType;
 
 const MESSAGE_TYPE_BITS: u32 = 4;
@@ -90,7 +90,6 @@ pub enum MessageType {
     StatusAllyGemsHeld,
     StatusEnemyGemsHeld,
     GroupTogether,
-    EndgameAltarProtect,
 }
 
 impl MessageType {
@@ -109,7 +108,6 @@ impl MessageType {
     const STATUS_ALLY_GEMS_HELD: u8 = Self::StatusAllyGemsHeld as u8;
     const STATUS_ENEMY_GEMS_HELD: u8 = Self::StatusEnemyGemsHeld as u8;
     const GROUP_TOGETHER: u8 = Self::GroupTogether as u8;
-    const ENDGAME_ALTAR_PROTECT: u8 = Self::EndgameAltarProtect as u8;
 
     pub fn from_nibble(nibble: u8) -> Self {
         match nibble {
@@ -128,7 +126,6 @@ impl MessageType {
             Self::STATUS_ALLY_GEMS_HELD => Self::StatusAllyGemsHeld,
             Self::STATUS_ENEMY_GEMS_HELD => Self::StatusEnemyGemsHeld,
             Self::GROUP_TOGETHER => Self::GroupTogether,
-            Self::ENDGAME_ALTAR_PROTECT => Self::EndgameAltarProtect,
             _ => unreachable!(),
         }
     }
@@ -136,7 +133,7 @@ impl MessageType {
     pub fn bit_length(&self) -> u32 {
         MESSAGE_TYPE_BITS
             + match self {
-                Self::FarmClear | Self::GroupTogether | Self::EndgameAltarProtect => ID_BITS,
+                Self::FarmClear | Self::GroupTogether => ID_BITS,
                 Self::FarmHelp => ID_BITS + SIGNAL_STRENGTH_BITS + 3 * CHAMPION_BITS,
                 Self::FarmCollection | Self::FarmGoingToCamp => ID_BITS + CHAMPION_BITS,
                 Self::CombatHeal => ID_BITS + SIGNAL_STRENGTH_BITS,
@@ -189,7 +186,8 @@ pub enum Message {
         ally_champion: Option<ChampionType>,
     },
     CombatTargetEnemy {
-        enemy_champion_id: ChampionType,
+        location_id: LocationID,
+        signal_strength: u16,
     },
 
     StatusAllyHealth {
@@ -219,10 +217,6 @@ pub enum Message {
 
     GroupTogether {
         location_id: LocationID,
-    },
-
-    EndgameAltarProtect {
-        altar_id: AltarID,
     },
 }
 
@@ -275,7 +269,6 @@ impl Message {
             Self::StatusAllyGemsHeld { .. } => MessageType::StatusAllyGemsHeld,
             Self::StatusEnemyGemsHeld { .. } => MessageType::StatusEnemyGemsHeld,
             Self::GroupTogether { .. } => MessageType::GroupTogether,
-            Self::EndgameAltarProtect { .. } => MessageType::EndgameAltarProtect,
         }
     }
 
@@ -403,8 +396,15 @@ impl Message {
                 );
                 writer.push(optional_champion_to_bits(*ally_champion), CHAMPION_BITS);
             }
-            Self::CombatTargetEnemy { enemy_champion_id } => {
-                writer.push(champion_to_bits(*enemy_champion_id), CHAMPION_BITS);
+            Self::CombatTargetEnemy {
+                location_id,
+                signal_strength,
+            } => {
+                writer.push(location_id.as_byte() as u32, ID_BITS);
+                writer.push(
+                    (*signal_strength).min(SIGNAL_STRENGTH_MAX) as u32,
+                    SIGNAL_STRENGTH_BITS,
+                );
             }
             Self::StatusAllyHealth {
                 ally_champion_id,
@@ -451,9 +451,6 @@ impl Message {
             Self::GroupTogether { location_id } => {
                 writer.push(location_id.as_byte() as u32, ID_BITS);
             }
-            Self::EndgameAltarProtect { altar_id } => {
-                writer.push(altar_id.0 as u32 & 0x3F, ID_BITS);
-            }
         }
 
         writer.finish()
@@ -498,7 +495,8 @@ impl Message {
                 ally_champion: bits_to_optional_champion(reader.take(CHAMPION_BITS)),
             },
             MessageType::CombatTargetEnemy => Self::CombatTargetEnemy {
-                enemy_champion_id: bits_to_champion(reader.take(CHAMPION_BITS)),
+                location_id: LocationID::from_byte(reader.take(ID_BITS) as u8),
+                signal_strength: reader.take(SIGNAL_STRENGTH_BITS) as u16,
             },
             MessageType::StatusAllyHealth => Self::StatusAllyHealth {
                 ally_champion_id: bits_to_champion(reader.take(CHAMPION_BITS)),
@@ -526,9 +524,6 @@ impl Message {
             },
             MessageType::GroupTogether => Self::GroupTogether {
                 location_id: LocationID::from_byte(reader.take(ID_BITS) as u8),
-            },
-            MessageType::EndgameAltarProtect => Self::EndgameAltarProtect {
-                altar_id: AltarID(reader.take(ID_BITS) as usize),
             },
         }
     }

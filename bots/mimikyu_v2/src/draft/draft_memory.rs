@@ -10,9 +10,9 @@ pub const DRAFT_MEMORY_BYTE_SIZE: usize = 1024;
 pub const DRAFT_PICKS: &[ChampionDraft; 5] = &[
     ChampionDraft::Willow,
     ChampionDraft::HeartOfRuin,
-    ChampionDraft::Prism,
-    ChampionDraft::VesperVale,
-    ChampionDraft::CassiAndIssac,
+    ChampionDraft::Varg,
+    ChampionDraft::Ren,
+    ChampionDraft::Vendetta,
 ];
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,8 +1,8 @@
 use crate::{
-    action::Action,
+    action::{movement::MovementState, Action},
     draft::draft_memory::{DraftMemory, DraftMemoryBlock},
-    memory::{champion_memory::ChampionMemory, CampGroupID, CampID},
-    sdk_interact::debug::{debug_champion_turn, debug_current_action, debug_draft_init},
+    memory::champion_memory::ChampionMemory,
+    sdk_interact::debug::{debug_current_action, debug_draft_init},
 };
 use cambc::ChampionDraft;
 
@@ -38,10 +38,11 @@ impl Strategy {
                 let mut champion_memory: ChampionMemory = ChampionMemory::from_draft_bytes(
                     cambc::draft_memory().bytes().try_into().unwrap(),
                 );
-                let mut current_action: Action = Action::Idle;
+                //let mut current_action: Action = Action::Idle;
 
                 // --- DEBUG SETUP START ---
-                current_action = Action::MoveToLocation {
+                let mut current_action = Action::MoveToLocation(MovementState {
+                    next_action: Box::new(None),
                     distance_field: None,
                     location_id: Some(crate::memory::LocationID::CampGroup(
                         champion_memory
@@ -51,23 +52,7 @@ impl Strategy {
                     )),
                     accepted_distance: 3,
                     action_group_type: crate::action::ActionGroupType::Intermediate,
-                };
-                for i in 1..champion_memory.map.camp_group_count {
-                    champion_memory
-                        .action_state
-                        .action_queue
-                        .push_back(Action::MoveToLocation {
-                            distance_field: None,
-                            location_id: Some(crate::memory::LocationID::CampGroup(
-                                champion_memory
-                                    .map
-                                    .distance_fields
-                                    .camp_group_discovery_queue[i],
-                            )),
-                            accepted_distance: 3,
-                            action_group_type: crate::action::ActionGroupType::Intermediate,
-                        });
-                }
+                });
                 // --- DEBUG SETUP END ---
 
                 loop {

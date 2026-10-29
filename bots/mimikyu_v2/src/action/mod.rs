@@ -1,45 +1,27 @@
-use std::collections::VecDeque;
-
 use crate::{
-    action::move_to_location::{move_to_location_turn, MoveToLocationResult},
-    memory::{
-        champion_memory::ChampionMemory, message::messages::Message, AltarID, CampGroupID,
-        LocationID,
+    action::{
+        combat::state::{ChampionCombatState, CombatActions, DefendState},
+        farm::{CampGroupCombatState, CollectionState, FarmActions, TributeState},
+        movement::{MoveToSpawnState, MovementActions, MovementState, MOVE_PROXIMITY},
+        shop::ActionBuyExtension,
     },
+    memory::{champion_memory::ChampionMemory, message::messages::Message, LocationID},
+    sdk_interact::map::chebyshev_distance,
 };
-use cambc::{Champion, ChampionType, ConsumableType, DistanceField, ItemType, Team, Vec2};
 
-pub mod action_state;
 pub mod combat;
-pub mod move_to_location;
+pub mod farm;
+pub mod movement;
+pub mod shop;
 
-const BUY_ORDER_NON_FOCUS: &[ItemType; 7] = &[
-    ItemType::TreasureShardOfHealth,
-    ItemType::DurabilityShardOfStrength,
-    ItemType::BruiserShardOfHealth,
-    ItemType::PowerShardOfStrength,
-    ItemType::HomeShardOfHealth,
-    ItemType::MonsterShardOfStrength,
-    ItemType::JungleShardOfHealth,
-];
-const BUY_ORDER_FOCUS: &[ItemType; 7] = &[
-    ItemType::TreasureShardOfHealth,
-    ItemType::DurabilityShardOfFocus,
-    ItemType::BruiserShardOfHealth,
-    ItemType::PowerShardOfStrength,
-    ItemType::HomeShardOfFocus,
-    ItemType::MonsterShardOfFocus,
-    ItemType::JungleShardOfHealth,
-];
-
-const COLLECTION_TIME: i32 = 5;
-
+#[repr(usize)]
 #[derive(Debug, Default, Clone, PartialEq, Copy, Hash)]
 pub enum ActionGroupType {
     #[default]
-    Intermediate, // [Idle, MoveToLocation(Intermediate)]
-    Farm,    // [CollectingFromCamp, InCampGroupCombat, TributingAtAltar, MoveToLocation(Farm)]
-    Support, // [GoingToHeal, DefendLocation, MoveToLocation(Support)]
+    Intermediate, // [Idle]
+    StartFarm,      // [MoveToLocation( -> InCampGroupCombat)]
+    Support,        // [GoingToHeal, DefendLocation, MoveToLocation( -> ChampionCombat)]
+    EndFarm, // [InCampGroupCombat, MoveToLocation(-> ), CollectingFromCamp, TributingAtAltar]
     ChampionCombat, // [InChampionCombatStall, InChampionComabtKill]
     Survival, // [EscapeToSpawn, InChampionCombatEscape]
 }
@@ -48,44 +30,23 @@ pub enum ActionGroupType {
 pub enum Action {
     #[default]
     Idle,
-    MoveToLocation {
-        distance_field: Option<DistanceField>,
-        location_id: Option<LocationID>,
-        accepted_distance: u16,
-        action_group_type: ActionGroupType,
-    },
-    CollectingFromCamp {
-        timer: i32,
-    },
-    InChampionComabtKill {
-        // TODO
-    },
-    InChampionCombatStall {
-        // TODO
-    },
-    InChampionCombatEscape {
-        // TODO
-    },
-    InCampGroupCombat {
-        camp_group_id: CampGroupID,
-        current_attack_tile: Vec2,
-        attack_tile_queue: VecDeque<Vec2>,
-    },
-    TributingAtAltar {
-        altar_id: AltarID,
-    },
-    DefendLocation {
-        location_id: LocationID,
-    },
-    EscapeToSpawn,
+    MoveToLocation(MovementState),
+    CollectingFromCamp(CollectionState),
+    InChampionComabtKill(ChampionCombatState),
+    InChampionCombatStall(ChampionCombatState),
+    InChampionCombatEscape(ChampionCombatState),
+    InCampGroupCombat(CampGroupCombatState),
+    TributingAtAltar(TributeState),
+    DefendLocation(DefendState),
+    EscapeToSpawn(MoveToSpawnState),
 }
 
 impl Action {
     const IDLE: i32 = ActionGroupType::Intermediate as i32;
 
-    const COLLECTING_FROM_CAMP: i32 = ActionGroupType::Farm as i32;
-    const IN_CAMP_GROUP_COMBAT: i32 = ActionGroupType::Farm as i32;
-    const TRIBUTING_AT_ALTAR: i32 = ActionGroupType::Farm as i32;
+    const COLLECTING_FROM_CAMP: i32 = ActionGroupType::EndFarm as i32;
+    const IN_CAMP_GROUP_COMBAT: i32 = ActionGroupType::EndFarm as i32;
+    const TRIBUTING_AT_ALTAR: i32 = ActionGroupType::EndFarm as i32;
 
     const DEFEND_LOCATION: i32 = ActionGroupType::Support as i32;
 
@@ -98,194 +59,289 @@ impl Action {
     pub fn precedence(&self) -> i32 {
         match self {
             Action::Idle => Self::IDLE,
-            Action::DefendLocation { .. } => Self::DEFEND_LOCATION,
+            Action::DefendLocation(_state) => Self::DEFEND_LOCATION,
 
-            Action::CollectingFromCamp { .. } => Self::COLLECTING_FROM_CAMP,
-            Action::InCampGroupCombat { .. } => Self::IN_CAMP_GROUP_COMBAT,
-            Action::TributingAtAltar { .. } => Self::TRIBUTING_AT_ALTAR,
+            Action::CollectingFromCamp(_state) => Self::COLLECTING_FROM_CAMP,
+            Action::InCampGroupCombat(_state) => Self::IN_CAMP_GROUP_COMBAT,
+            Action::TributingAtAltar(_state) => Self::TRIBUTING_AT_ALTAR,
 
-            Action::InChampionCombatStall { .. } => Self::IN_CHAMPION_COMBAT_STALL,
-            Action::InChampionComabtKill { .. } => Self::IN_CHAMPION_COMABT_KILL,
+            Action::InChampionCombatStall(_state) => Self::IN_CHAMPION_COMBAT_STALL,
+            Action::InChampionComabtKill(_state) => Self::IN_CHAMPION_COMABT_KILL,
 
-            Action::EscapeToSpawn => Self::ESCAPE_TO_SPAWN,
-            Action::InChampionCombatEscape { .. } => Self::IN_CHAMPION_COMBAT_ESCAPE,
+            Action::EscapeToSpawn(_state) => Self::ESCAPE_TO_SPAWN,
+            Action::InChampionCombatEscape(_state) => Self::IN_CHAMPION_COMBAT_ESCAPE,
 
-            Action::MoveToLocation {
-                action_group_type, ..
-            } => *action_group_type as i32,
+            Action::MoveToLocation(state) => state.action_group_type as i32,
         }
     }
 
     fn try_prempt_current_action(&mut self, champion_memory: &mut ChampionMemory) {
-        let highest_precedence_message_action: Option<Self> =
-            champion_memory.message_board.inbox.iter().fold(
-                None,
-                |highest_precedence_message_action, received_message| match &received_message
-                    .message
-                {
-                    Message::FarmGoingToCamp { .. }
-                    | Message::EndgameAltarProtect { .. }
-                    | Message::FarmClear { .. }
-                    | Message::StatusAllyHealth { .. }
-                    | Message::StatusEnemyHealth { .. }
-                    | Message::StatusAllyLocation { .. }
-                    | Message::StatusEnemyLocation { .. }
-                    | Message::StatusAllyGemsHeld { .. }
-                    | Message::StatusEnemyGemsHeld { .. } => highest_precedence_message_action,
+        let message_reaction: Option<Self> = Self::message_reaction(champion_memory);
 
-                    Message::FarmHelp {
-                        camp_group_id,
-                        signal_strength,
-                        ally_champions_helping,
-                    } => {
-                        // TODO
-                        // Move to farm, enter farm combat
-                        todo!();
-                    }
-                    Message::FarmCollection {
-                        camp_group_id,
-                        ally_champion_claiming,
-                    } => {
-                        // TODO
-                        // Move to center, enter collection action
-                        todo!();
-                    }
-
-                    Message::CombatHeal {
-                        location_id,
-                        signal_strength,
-                    } => {
-                        // TODO
-                        // Move to location
-                        todo!();
-                    }
-                    Message::CombatLosingFightNeedHelp {
-                        location_id,
-                        signal_strength,
-                        ally_champion,
-                    } => {
-                        // TODO
-                        // Move to location
-                        todo!();
-                    }
-                    Message::CombatWinningFightWantHelp {
-                        location_id,
-                        signal_strength,
-                        ally_champion,
-                    } => {
-                        // TODO
-                        // Move to location
-                        todo!();
-                    }
-                    Message::CombatTargetEnemy { enemy_champion_id } => {
-                        // TODO
-                        // If in combat action, assign enemy as target
-                        todo!();
-                    }
-                    Message::GroupTogether { location_id } => {
-                        // TODO
-                        // Move to location
-                        todo!();
-                    }
-                },
-            );
-
-        // TODO: Look around for enemies if the case enter combat no matter what,
-        // also applie hp threshold to return to base and a higher threshold for asking for heals
-        // from willow
-    }
-
-    fn auto_buy(&mut self, champion_memory: &mut ChampionMemory) {
-        let me: &Champion = cambc::self_champion().unwrap().unwrap();
-        let _ = me.buy_consumable(ConsumableType::TpCrystal);
-        while me.gold_count().unwrap() >= 30 {
-            let buy_item: ItemType = match me.champion_name().unwrap() {
-                ChampionType::Willow | ChampionType::HeartOfRuin | ChampionType::Prism => {
-                    BUY_ORDER_FOCUS[(champion_memory.action_state.buy_index / 5) % 7]
-                }
-                _ => BUY_ORDER_NON_FOCUS[(champion_memory.action_state.buy_index / 5) % 7],
-            };
-            champion_memory.action_state.buy_index += 1;
-            let _ = me.buy(buy_item);
-        }
+        todo!()
     }
 
     pub fn turn(&mut self, champion_memory: &mut ChampionMemory) {
-        self.auto_buy(champion_memory);
+        self.buy_action(champion_memory);
         self.try_prempt_current_action(champion_memory);
 
         match self {
-            Action::Idle => {
-                if let Some(action) = champion_memory.action_state.action_queue.pop_front() {
-                    *self = action;
-                }
-                self.turn(champion_memory);
-            }
-            Action::MoveToLocation {
-                distance_field,
-                location_id,
-                accepted_distance,
-                action_group_type,
-            } => {
-                if move_to_location_turn(
-                    distance_field,
-                    *location_id,
-                    *accepted_distance,
-                    *action_group_type,
-                    champion_memory,
-                ) == MoveToLocationResult::Finished
-                {
-                    *self = Self::Idle;
-                }
-            }
-            Action::CollectingFromCamp { timer } => {
-                *timer -= 1;
-                if *timer < 0 {
-                    *self = Self::Idle;
-                }
-            }
-            Action::InChampionComabtKill { .. } => {
-                todo!()
-            }
-            Action::InChampionCombatStall { .. } => {
-                todo!()
-            }
-            Action::InChampionCombatEscape { .. } => {
-                todo!()
-            }
-            Action::InCampGroupCombat {
-                camp_group_id,
-                current_attack_tile,
-                attack_tile_queue,
-            } => {
-                todo!()
-            }
-            Action::TributingAtAltar { altar_id } => {
-                let me: &Champion = cambc::self_champion().unwrap().unwrap();
-                if me.gem_count().unwrap() == 0 {
-                    *self = Self::Idle;
-                    return;
-                }
-                if !me.is_submitting_gems().unwrap() {
-                    cambc::self_champion().unwrap().unwrap().submit_gems(
-                        champion_memory.map.points_of_interest.altar_locations[altar_id.0],
-                    );
-                }
-            }
-            Action::DefendLocation { location_id: _ } => (),
-            Action::EscapeToSpawn => {
-                let me: &Champion = cambc::self_champion().unwrap().unwrap();
-                if cambc::map::spawn_region(Team::Ally)
-                    .unwrap()
-                    .is_set(me.position().unwrap())
-                    .unwrap()
-                {
-                    *self = Self::Idle;
-                }
-                if !me.is_recalling().unwrap() {
-                    me.recall();
-                }
-            }
+            Action::Idle => (),
+            Action::MoveToLocation(_) => self.move_to_location(champion_memory),
+            Action::CollectingFromCamp(_) => self.collection(champion_memory),
+            Action::InChampionComabtKill(_) => self.champion_combat_kill(champion_memory),
+            Action::InChampionCombatStall(_) => self.champion_combat_stall(champion_memory),
+            Action::InChampionCombatEscape(_) => self.champion_combat_escape(champion_memory),
+            Action::InCampGroupCombat(_) => self.camp_group_combat(champion_memory),
+            Action::TributingAtAltar(_) => self.tributing_at_altar(champion_memory),
+            Action::DefendLocation(_) => self.defend(champion_memory),
+            Action::EscapeToSpawn(_) => self.escape_to_spawn(champion_memory),
         }
+    }
+
+    fn message_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
+        champion_memory.message_board.inbox.iter().fold(
+            None,
+            |highest_precedence_message_action, received_message| match &received_message.message {
+                Message::FarmGoingToCamp { .. }
+                | Message::FarmClear { .. }
+                | Message::StatusAllyHealth { .. }
+                | Message::StatusEnemyHealth { .. }
+                | Message::StatusAllyLocation { .. }
+                | Message::StatusEnemyLocation { .. }
+                | Message::StatusAllyGemsHeld { .. }
+                | Message::StatusEnemyGemsHeld { .. } => highest_precedence_message_action,
+
+                Message::FarmHelp {
+                    camp_group_id,
+                    signal_strength,
+                    ally_champions_helping: _,
+                } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::StartFarm as i32
+                        && chebyshev_distance(
+                            champion_memory.map.points_of_interest.camp_group_centers
+                                [camp_group_id.0],
+                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
+                        ) <= *signal_strength as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(Some(Self::InCampGroupCombat(
+                                CampGroupCombatState {
+                                    camp_group_id: *camp_group_id,
+                                    current_target_camp: 0,
+                                },
+                            ))),
+                            distance_field: champion_memory
+                                .map
+                                .distance_fields
+                                .try_get(*camp_group_id)
+                                .cloned(),
+                            location_id: Some(LocationID::CampGroup(*camp_group_id)),
+                            accepted_distance: MOVE_PROXIMITY,
+                            action_group_type: ActionGroupType::StartFarm,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+                Message::FarmCollection {
+                    camp_group_id,
+                    ally_champion_claiming: _,
+                } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::EndFarm as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(Some(Self::CollectingFromCamp(
+                                CollectionState {},
+                            ))),
+                            distance_field: champion_memory
+                                .map
+                                .distance_fields
+                                .try_get(*camp_group_id)
+                                .cloned(),
+                            location_id: Some(LocationID::CampGroup(*camp_group_id)),
+                            accepted_distance: 0,
+                            action_group_type: ActionGroupType::EndFarm,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+
+                Message::CombatHeal {
+                    location_id,
+                    signal_strength,
+                } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::Support as i32
+                        && chebyshev_distance(
+                            champion_memory.map.points_of_interest.locate(*location_id),
+                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
+                        ) <= *signal_strength as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(Some(Self::CollectingFromCamp(
+                                CollectionState {},
+                            ))),
+                            distance_field: if let LocationID::CampGroup(camp_group_id) =
+                                location_id
+                            {
+                                champion_memory
+                                    .map
+                                    .distance_fields
+                                    .try_get(*camp_group_id)
+                                    .cloned()
+                            } else {
+                                None
+                            },
+                            location_id: Some(*location_id),
+                            accepted_distance: MOVE_PROXIMITY,
+                            action_group_type: ActionGroupType::Support,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+                Message::CombatLosingFightNeedHelp {
+                    location_id,
+                    signal_strength,
+                    ally_champion: _,
+                } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::Support as i32
+                        && chebyshev_distance(
+                            champion_memory.map.points_of_interest.locate(*location_id),
+                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
+                        ) <= *signal_strength as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(None),
+                            distance_field: if let LocationID::CampGroup(camp_group_id) =
+                                location_id
+                            {
+                                champion_memory
+                                    .map
+                                    .distance_fields
+                                    .try_get(*camp_group_id)
+                                    .cloned()
+                            } else {
+                                None
+                            },
+                            location_id: Some(*location_id),
+                            accepted_distance: MOVE_PROXIMITY,
+                            action_group_type: ActionGroupType::Support,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+                Message::CombatWinningFightWantHelp {
+                    location_id,
+                    signal_strength,
+                    ally_champion: _,
+                } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::Support as i32
+                        && chebyshev_distance(
+                            champion_memory.map.points_of_interest.locate(*location_id),
+                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
+                        ) <= *signal_strength as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(None),
+                            distance_field: if let LocationID::CampGroup(camp_group_id) =
+                                location_id
+                            {
+                                champion_memory
+                                    .map
+                                    .distance_fields
+                                    .try_get(*camp_group_id)
+                                    .cloned()
+                            } else {
+                                None
+                            },
+                            location_id: Some(*location_id),
+                            accepted_distance: MOVE_PROXIMITY,
+                            action_group_type: ActionGroupType::Support,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+                Message::CombatTargetEnemy {
+                    location_id,
+                    signal_strength,
+                } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::Support as i32
+                        && chebyshev_distance(
+                            champion_memory.map.points_of_interest.locate(*location_id),
+                            cambc::self_champion().unwrap().unwrap().position().unwrap(),
+                        ) <= *signal_strength as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(None),
+                            distance_field: if let LocationID::CampGroup(camp_group_id) =
+                                location_id
+                            {
+                                champion_memory
+                                    .map
+                                    .distance_fields
+                                    .try_get(*camp_group_id)
+                                    .cloned()
+                            } else {
+                                None
+                            },
+                            location_id: Some(*location_id),
+                            accepted_distance: MOVE_PROXIMITY,
+                            action_group_type: ActionGroupType::Support,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+                Message::GroupTogether { location_id } => {
+                    if highest_precedence_message_action
+                        .as_ref()
+                        .map_or(0, |action| action.precedence())
+                        < ActionGroupType::Support as i32
+                    {
+                        Some(Self::MoveToLocation(MovementState {
+                            next_action: Box::new(None),
+                            distance_field: if let LocationID::CampGroup(camp_group_id) =
+                                location_id
+                            {
+                                champion_memory
+                                    .map
+                                    .distance_fields
+                                    .try_get(*camp_group_id)
+                                    .cloned()
+                            } else {
+                                None
+                            },
+                            location_id: Some(*location_id),
+                            accepted_distance: MOVE_PROXIMITY,
+                            action_group_type: ActionGroupType::Support,
+                        }))
+                    } else {
+                        highest_precedence_message_action
+                    }
+                }
+            },
+        )
     }
 }

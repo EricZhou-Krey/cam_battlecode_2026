@@ -4,7 +4,7 @@ use crate::{
     memory::{AltarID, CampGroupID, CampID, ControlPointID, LocationID, ShortcutID},
     sdk_interact::map::{chebyshev_distance, Center},
 };
-use cambc::{map::camp, Bitboard, Camp, DistanceField, Vec2};
+use cambc::{Bitboard, Camp, DistanceField, Vec2};
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,10 +215,11 @@ impl LazyMap {
             .map(|camp_group| {
                 let camps: &[Camp] = camp_group.camps();
                 let n_camps: usize = camps.len();
-                let camp_ids: Vec<CampID> = (0..n).map(CampID).collect();
+                let mut camp_ids: Vec<CampID> = (0..n_camps).map(CampID).collect();
                 camp_ids.sort_unstable_by_key(|camp_id| {
-                    CampTypeAttackOrder::from(camps[camp_id.0].kind())
+                    CampTypeAttackOrder::from(camps[camp_id.0].kind()) as usize
                 });
+                camp_ids
             })
             .collect();
         let camp_group_reset_timer: Vec<i32> = cambc::map::camp_groups()

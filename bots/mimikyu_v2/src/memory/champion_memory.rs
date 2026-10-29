@@ -1,5 +1,4 @@
 use crate::{
-    action::action_state::ActionState,
     draft::draft_memory::{DraftMemory, DraftMemoryBlock, DRAFT_MEMORY_BYTE_SIZE},
     memory::{
         champion_info::AllChampionInfo,
@@ -14,7 +13,8 @@ pub struct ChampionMemory {
     pub map: LazyMap,
     pub champion_info: AllChampionInfo,
     pub message_board: MessageBoard,
-    pub action_state: ActionState,
+
+    pub buy_index: usize,
 }
 
 impl ChampionMemory {
@@ -25,7 +25,8 @@ impl ChampionMemory {
             map: LazyMap::new(&draft_memory),
             champion_info: AllChampionInfo::new(),
             message_board: MessageBoard::new(),
-            action_state: ActionState::new(),
+
+            buy_index: 0,
         }
     }
 
@@ -110,9 +111,6 @@ impl ChampionMemory {
                         .and_modify(|champion_info| {
                             champion_info.gems_held = Some(gems_held_tens * 10)
                         });
-                }
-                Message::EndgameAltarProtect { altar_id } => {
-                    self.action_state.last_bastion = Some(altar_id);
                 }
                 _ => (),
             }
