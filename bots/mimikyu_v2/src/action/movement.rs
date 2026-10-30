@@ -52,13 +52,18 @@ impl MovementActions for Action {
             .points_of_interest
             .locate(state.location_id);
 
-        if step_with_fallback(&state.distance_field, target_position) {
-            state.route = None;
-            state.route_failures = 0;
+        let routed: bool = follow_route(me, state, champion_memory, current_capabilities);
+
+        if !routed {
+            if !step_with_fallback(&state.distance_field, target_position) {
+                *self = Self::Idle;
+                self.turn(champion_memory);
+                return;
+            }
             dash_forward(me, state, champion_memory, current_capabilities);
-        } else {
-            follow_route(me, state, champion_memory, current_capabilities);
         }
+
+        dash_forward(me, state, champion_memory, current_capabilities);
 
         let new_position: Vec2 = me.position().unwrap();
         let distance_to_goal: u16 = state.distance_field.get(new_position).unwrap_or(u16::MAX);

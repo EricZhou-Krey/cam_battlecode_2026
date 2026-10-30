@@ -66,12 +66,9 @@ fn to_vec2(point: [u8; 2]) -> Vec2 {
     }
 }
 
-fn describe_location(memory: &ChampionMemory, location: Option<LocationID>) -> String {
+fn describe_location(location: Option<Vec2>) -> String {
     match location {
-        Some(location_id) => {
-            let point: Vec2 = memory.map.points_of_interest.locate(location_id);
-            format!("{:?} at ({}, {})", location_id, point.x, point.y)
-        }
+        Some(point) => format!("({}, {})", point.x, point.y),
         None => String::from("none"),
     }
 }
@@ -384,7 +381,7 @@ pub fn draw_points_of_interest(memory: &ChampionMemory) {
             cambc::debug::draw_dot(*control_point, COLOR_CONTROL_POINT).unwrap();
         }
         for (from, to) in &points_of_interest.shortcuts {
-            let jump_length: i32 = chebyshev_distance(*from, *to);
+            let jump_length: i32 = chebyshev_distance(*from, *to).into();
             let line_color: u32 = if jump_length > 2 {
                 COLOR_LONG_JUMP
             } else {
@@ -406,7 +403,7 @@ pub fn draw_points_of_interest(memory: &ChampionMemory) {
 }
 
 pub fn print_team_champion_info(
-    memory: &ChampionMemory,
+    _memory: &ChampionMemory,
     label: &str,
     team_info: &HashMap<ChampionType, ChampionInfo>,
     color: u32,
@@ -432,13 +429,10 @@ pub fn print_team_champion_info(
             );
             println!(
                 "      last seen: {}",
-                describe_location(memory, info.last_seen),
+                describe_location(info.last_seen),
             );
 
-            let last_seen_point: Option<Vec2> = info
-                .last_seen
-                .map(|location_id| memory.map.points_of_interest.locate(location_id));
-            if let Some(from) = last_seen_point {
+            if let Some(from) = info.last_seen {
                 cambc::debug::draw_dot(from, color).unwrap();
             }
         }
@@ -571,8 +565,7 @@ fn draw_message(memory: &ChampionMemory, message: &Message) {
                     .champion_info
                     .ally
                     .get(&champion)
-                    .and_then(|info| info.last_seen)
-                    .and_then(|location_id| safe_locate(memory, location_id));
+                    .and_then(|info| info.last_seen);
                 if let Some(point) = responder_location {
                     let _ = cambc::debug::draw_line(point, center, line_color);
                     let _ = cambc::debug::draw_dot(point, COLOR_ALLY_CHAMPION);
@@ -742,7 +735,7 @@ pub fn debug_champion_turn(memory: &ChampionMemory) {
     draw_points_of_interest(memory);
 }
 
-pub fn debug_current_action(action: &Action, memory: &ChampionMemory) {
+pub fn debug_current_action(action: &Action, _memory: &ChampionMemory) {
     match action {
         Action::Idle => (),
         Action::MoveToLocation { .. } => (),

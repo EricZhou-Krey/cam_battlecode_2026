@@ -14,7 +14,7 @@ const TELEPORT_RANGE: i32 = 3;
 const DASH_ACTION_COST: u16 = 1;
 const TELEPORT_ACTION_COST: u16 = 1;
 const OFFSET_BIAS: i32 = 8;
-const MINIMUM_SHORTCUT_SPACING: i32 = 3;
+const MINIMUM_SHORTCUT_SPACING: u16 = 3;
 const UNREACHED_DISTANCE: u16 = u16::MAX;
 
 #[derive(Debug, Clone, Copy)]

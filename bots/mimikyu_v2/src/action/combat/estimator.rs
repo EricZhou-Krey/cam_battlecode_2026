@@ -1,7 +1,7 @@
 use crate::memory::{
     champion_info::{AllChampionInfo, ChampionInfo},
     champion_memory::ChampionMemory,
-    CampID, StatID,
+    CampGroupID, StatID,
 };
 use cambc::{CampType, ChampionType};
 
@@ -77,7 +77,7 @@ where
 }
 
 pub trait MemoryCombatEstimator {
-    fn can_kill_camp(&self, camp_id: CampID, ally_champions: &[ChampionType]) -> bool;
+    fn can_kill_camp(&self, camp_group_id: CampGroupID, ally_champions: &[ChampionType]) -> bool;
     fn is_good_combat(
         &self,
         enemy_champion: &[ChampionType],
@@ -96,9 +96,9 @@ const FOCUS_DAMAGE_SCALE: f32 =
         / ABILITY_DAMAGE_INTERVAL;
 
 impl MemoryCombatEstimator for ChampionMemory {
-    fn can_kill_camp(&self, camp_id: CampID, ally_champions: &[ChampionType]) -> bool {
-        let camp_health: f32 = self.map.camp_group_effective_hp[camp_id.0];
-        let camp_damage: f32 = self.map.camp_group_damage_per_round[camp_id.0];
+    fn can_kill_camp(&self, camp_group_id: CampGroupID, ally_champions: &[ChampionType]) -> bool {
+        let camp_group_health: f32 = self.map.camp_group_effective_hp[camp_group_id.0];
+        let camp_group_damage: f32 = self.map.camp_group_damage_per_round[camp_group_id.0];
         let champion_health: f32 = self
             .champion_info
             .ally_champion_infos(ally_champions)
@@ -108,9 +108,9 @@ impl MemoryCombatEstimator for ChampionMemory {
             .ally_champion_infos(ally_champions)
             .current_stat(StatID::Strength);
 
-        let round_count: f32 = camp_health / champion_damage;
+        let round_count: f32 = camp_group_health / champion_damage;
 
-        champion_health > round_count * camp_damage
+        champion_health > round_count * camp_group_damage
     }
 
     fn is_good_combat(

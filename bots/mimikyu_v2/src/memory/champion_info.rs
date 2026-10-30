@@ -1,4 +1,4 @@
-use cambc::{Champion, ChampionStats, ChampionType, Team, Vec2};
+use cambc::{Champion, ChampionType, Team, Vec2};
 use std::collections::HashMap;
 
 use crate::memory::{lazy_map::LazyMap, LocationID};

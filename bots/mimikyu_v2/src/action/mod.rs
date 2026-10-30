@@ -1,6 +1,9 @@
 use crate::{
     action::{
-        combat::state::{ChampionCombatState, CombatActions, DefendState, COMBAT_PROXIMITY},
+        combat::{
+            estimator::MemoryCombatEstimator,
+            state::{ChampionCombatState, CombatActions, DefendState, COMBAT_PROXIMITY},
+        },
         farm::{CampGroupCombatState, CollectionState, FarmActions, TributeState},
         movement::{MoveToSpawnState, MovementActions, MovementState, MOVE_PROXIMITY},
         shop::ActionBuyExtension,
@@ -8,7 +11,7 @@ use crate::{
     memory::{
         champion_memory::ChampionMemory,
         message::{message_board::ReceivedMessage, messages::Message},
-        LocationID,
+        CampGroupID, LocationID,
     },
     sdk_interact::map::chebyshev_distance,
 };
@@ -21,8 +24,8 @@ pub mod route;
 pub mod shop;
 
 pub const COMBAT_HEAL_SIGNAL_STRENGTH: u16 = 15;
-pub const DANGER_HP_THRESHOLD: f32 = 0.3;
-pub const WARNING_HP_THRESHOLD: f32 = 0.6;
+pub const DANGER_HP_THRESHOLD: f32 = 0.2;
+pub const WARNING_HP_THRESHOLD: f32 = 0.5;
 
 #[repr(usize)]
 #[derive(Debug, Default, Clone, PartialEq, Copy, Hash)]
@@ -104,7 +107,9 @@ impl Action {
         }
 
         if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
-            let reply_reaction: Option<Self> = Self::reply_reaction(champion_memory);
+            if let Some(reaction) = Self::reply_reaction(champion_memory) {
+                *self = reaction;
+            }
         }
 
         if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
@@ -153,11 +158,65 @@ impl Action {
     }
 
     fn farm_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
-        // Go towards closest farm that will respawn or has respawned since last and ask for
-        // proxmity for help, close, far signal strengths for camps with alot of danager,
-        // should check responses and prempt the movement if not enough champions reply and is
-        // unsafe, then choose a different camp that is not as dangerous perhaps.
-        todo!()
+        let me: &Champion = cambc::self_champion().unwrap().unwrap();
+        let me_position: Vec2 = me.position().unwrap();
+        let alive_camp_group_ids: Vec<CampGroupID> = (0..champion_memory
+            .map
+            .points_of_interest
+            .camp_group_centers
+            .len())
+            .filter_map(|index| {
+                let camp_group_id: CampGroupID = CampGroupID(index);
+                let distance_field: Option<&DistanceField> =
+                    champion_memory.map.distance_fields.try_get(
+                        LocationID::CampGroup(camp_group_id),
+                        &champion_memory.map.points_of_interest,
+                    );
+
+                let time_to_respawn: i32 =
+                    *champion_memory.map.camp_group_respawn_timer.get(index)?;
+
+                if distance_field.map_or(-1_i32, |field| field.get(me_position).unwrap() as i32)
+                    > time_to_respawn
+                {
+                    Some(CampGroupID(index))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let target_camp_group: Option<CampGroupID> = alive_camp_group_ids
+            .iter()
+            .min_by_key(|camp_group_id| {
+                chebyshev_distance(
+                    me_position,
+                    champion_memory.map.points_of_interest.camp_group_centers[camp_group_id.0],
+                )
+            })
+            .copied();
+
+        let camp_group = target_camp_group?;
+        let location_id: LocationID = LocationID::CampGroup(camp_group);
+        let distance_field = champion_memory
+            .map
+            .distance_fields
+            .try_get(location_id, &champion_memory.map.points_of_interest)
+            .cloned()?;
+
+        Some(Self::MoveToLocation(MovementState {
+            next_action: Box::new(Some(Self::InCampGroupCombat(CampGroupCombatState {
+                camp_group_id: camp_group,
+                current_target_camp: 0,
+            }))),
+            distance_field,
+            location_id,
+            accepted_distance: MOVE_PROXIMITY,
+            action_group_type: ActionGroupType::StartFarm,
+            route: None,
+            route_failures: 0,
+            allow_route: true,
+        }))
     }
 
     fn survival_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
@@ -167,14 +226,10 @@ impl Action {
         if current_hp_percentage <= DANGER_HP_THRESHOLD {
             Some(Self::EscapeToSpawn(MoveToSpawnState {}))
         } else if current_hp_percentage <= WARNING_HP_THRESHOLD {
-            let Some(location_id): Option<LocationID> =
-                champion_memory.map.points_of_interest.try_get_closest_poi(
-                    me.position().unwrap(),
-                    &mut champion_memory.map.distance_fields,
-                )
-            else {
-                return None;
-            };
+            let location_id = champion_memory.map.points_of_interest.try_get_closest_poi(
+                me.position().unwrap(),
+                &mut champion_memory.map.distance_fields,
+            )?;
 
             champion_memory.message_board.send(Message::CombatHeal {
                 location_id,
@@ -188,7 +243,7 @@ impl Action {
     }
 
     fn reply_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
-        let reaction: Option<Self> = None;
+        let mut reaction: Option<Self> = None;
         let replies: Vec<Message> = std::mem::take(&mut champion_memory.message_board.responses);
 
         for reply in replies {
@@ -198,21 +253,54 @@ impl Action {
                     ally_champions_helping,
                     ..
                 } => {
-                    let helpers: Vec<ChampionType> =
+                    let me_type: ChampionType = cambc::self_champion()
+                        .unwrap()
+                        .unwrap()
+                        .champion_name()
+                        .unwrap();
+                    let mut ally_champions: Vec<ChampionType> =
                         ally_champions_helping.into_iter().flatten().collect();
-                    // helpers = champions that accepted and are coming to camp_group_id
-                    // If Helper is > 0  commit to the current movement
-                    // Else see if you can fight the camp alone at your current hp, if you cannot
-                    // then change back to idle and try again, add a dirty flag to attempted ones
-                    // aswell
+                    ally_champions.push(me_type);
+
+                    if !champion_memory.can_kill_camp(camp_group_id, &ally_champions) {
+                        for ally_champion_id in ally_champions {
+                            if ally_champion_id == me_type {
+                                continue;
+                            }
+                            champion_memory
+                                .message_board
+                                .send(Message::FarmCancel { ally_champion_id });
+                        }
+                        reaction = Some(Self::Idle);
+                    }
                 }
                 Message::FarmCollection {
                     camp_group_id,
                     ally_champion_claiming,
                 } => {
-                    // Ally claiming is the one that was assign when message was given
-                    // ally should be the one claiming, but if the ally claiming is none then take
-                    // it yourself
+                    if ally_champion_claiming.is_some() {
+                        continue;
+                    }
+                    let location_id: LocationID = LocationID::CampGroup(camp_group_id);
+                    let Some(distance_field): Option<DistanceField> = champion_memory
+                        .map
+                        .distance_fields
+                        .try_get(location_id, &champion_memory.map.points_of_interest)
+                        .cloned()
+                    else {
+                        continue;
+                    };
+
+                    reaction = Some(Self::MoveToLocation(MovementState {
+                        next_action: Box::new(Some(Self::CollectingFromCamp(CollectionState {}))),
+                        distance_field,
+                        location_id,
+                        accepted_distance: 0,
+                        action_group_type: ActionGroupType::EndFarm,
+                        route: None,
+                        route_failures: 0,
+                        allow_route: true,
+                    }));
                 }
                 _ => (),
             }
@@ -227,7 +315,7 @@ impl Action {
 
         for enemy_champion_id in &champion_memory.champion_info.enemy_updated_this_turn {
             let Some(enemy_position): Option<Vec2> =
-                champion_memory.champion_info.enemy[&enemy_champion_id].last_seen
+                champion_memory.champion_info.enemy[enemy_champion_id].last_seen
             else {
                 continue;
             };
@@ -280,7 +368,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::StartFarm as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(Some(Self::InCampGroupCombat(
                                 CampGroupCombatState {
@@ -297,6 +385,23 @@ impl Action {
                             allow_route: true,
                         }),
                     ));
+                }
+                Message::FarmCancel { ally_champion_id } => {
+                    if max_precedence > ActionGroupType::StartFarm as i32 {
+                        continue;
+                    }
+                    let me_type: ChampionType = cambc::self_champion()
+                        .unwrap()
+                        .unwrap()
+                        .champion_name()
+                        .unwrap();
+
+                    if me_type != *ally_champion_id {
+                        continue;
+                    }
+
+                    max_precedence = ActionGroupType::StartFarm as i32;
+                    reaction = Some((received_message, Self::Idle));
                 }
                 Message::FarmCollection {
                     camp_group_id,
@@ -319,7 +424,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::EndFarm as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(Some(Self::CollectingFromCamp(
                                 CollectionState {},
@@ -356,7 +461,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::Support as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(Some(Self::CollectingFromCamp(
                                 CollectionState {},
@@ -394,7 +499,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::Support as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(None),
                             distance_field,
@@ -430,7 +535,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::Support as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(None),
                             distance_field,
@@ -465,7 +570,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::Support as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(None),
                             distance_field,
@@ -493,7 +598,7 @@ impl Action {
 
                     max_precedence = ActionGroupType::Support as i32;
                     reaction = Some((
-                        &received_message,
+                        received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(None),
                             distance_field,

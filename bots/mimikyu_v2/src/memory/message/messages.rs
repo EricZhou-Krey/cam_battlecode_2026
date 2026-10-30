@@ -7,7 +7,6 @@ const SIGNAL_STRENGTH_BITS: u32 = 4;
 const CHAMPION_BITS: u32 = 4;
 const HEALTH_BITS: u32 = 8;
 const GEMS_BITS: u32 = 8;
-const CONFIRMATION_BITS: u32 = 1;
 
 const SIGNAL_STRENGTH_MAX: u16 = 15;
 const GEMS_HELD_TENS_MAX: u32 = 255;
@@ -78,7 +77,7 @@ fn bits_to_optional_champion(bits: u32) -> Option<ChampionType> {
 pub enum MessageType {
     FarmClear,
     FarmHelp,
-    FarmConfirm,
+    FarmCancel,
     FarmCollection,
     FarmGoingToCamp,
     CombatHeal,
@@ -97,7 +96,7 @@ pub enum MessageType {
 impl MessageType {
     const FARM_CLEAR: u8 = Self::FarmClear as u8;
     const FARM_HELP: u8 = Self::FarmHelp as u8;
-    const FARM_CONFIRM: u8 = Self::FarmConfirm as u8;
+    const FARM_CANCEL: u8 = Self::FarmCancel as u8;
     const FARM_COLLECTION: u8 = Self::FarmCollection as u8;
     const FARM_GOING_TO_CAMP: u8 = Self::FarmGoingToCamp as u8;
     const COMBAT_HEAL: u8 = Self::CombatHeal as u8;
@@ -116,7 +115,7 @@ impl MessageType {
         match nibble {
             Self::FARM_CLEAR => Self::FarmClear,
             Self::FARM_HELP => Self::FarmHelp,
-            Self::FARM_CONFIRM => Self::FarmConfirm,
+            Self::FARM_CANCEL => Self::FarmCancel,
             Self::FARM_COLLECTION => Self::FarmCollection,
             Self::FARM_GOING_TO_CAMP => Self::FarmGoingToCamp,
             Self::COMBAT_HEAL => Self::CombatHeal,
@@ -139,7 +138,7 @@ impl MessageType {
             + match self {
                 Self::FarmClear | Self::GroupTogether => ID_BITS,
                 Self::FarmHelp => ID_BITS + SIGNAL_STRENGTH_BITS + 3 * CHAMPION_BITS,
-                Self::FarmConfirm => ID_BITS + CONFIRMATION_BITS,
+                Self::FarmCancel => CHAMPION_BITS,
                 Self::FarmCollection | Self::FarmGoingToCamp => ID_BITS + CHAMPION_BITS,
                 Self::CombatHeal => ID_BITS + SIGNAL_STRENGTH_BITS,
                 Self::CombatLosingFightNeedHelp | Self::CombatWinningFightWantHelp => {
@@ -167,9 +166,8 @@ pub enum Message {
         signal_strength: u16,
         ally_champions_helping: [Option<ChampionType>; 3],
     },
-    FarmConfirm {
-        camp_group_id: CampGroupID,
-        confirmed: bool,
+    FarmCancel {
+        ally_champion_id: ChampionType,
     },
     FarmCollection {
         camp_group_id: CampGroupID,
@@ -265,7 +263,7 @@ impl Message {
         match self {
             Self::FarmClear { .. } => MessageType::FarmClear,
             Self::FarmHelp { .. } => MessageType::FarmHelp,
-            Self::FarmConfirm { .. } => MessageType::FarmConfirm,
+            Self::FarmCancel { .. } => MessageType::FarmCancel,
             Self::FarmCollection { .. } => MessageType::FarmCollection,
             Self::FarmGoingToCamp { .. } => MessageType::FarmGoingToCamp,
             Self::CombatHeal { .. } => MessageType::CombatHeal,
@@ -362,12 +360,8 @@ impl Message {
                     writer.push(optional_champion_to_bits(*champion), CHAMPION_BITS);
                 }
             }
-            Self::FarmConfirm {
-                camp_group_id,
-                confirmed,
-            } => {
-                writer.push(camp_group_id.0 as u32, ID_BITS);
-                writer.push(if *confirmed { 1 } else { 0 }, CONFIRMATION_BITS);
+            Self::FarmCancel { ally_champion_id } => {
+                writer.push(champion_to_bits(*ally_champion_id), CHAMPION_BITS);
             }
             Self::FarmCollection {
                 camp_group_id,
@@ -489,9 +483,8 @@ impl Message {
                     bits_to_optional_champion(reader.take(CHAMPION_BITS))
                 }),
             },
-            MessageType::FarmConfirm => Self::FarmConfirm {
-                camp_group_id: CampGroupID(reader.take(ID_BITS) as usize),
-                confirmed: reader.take(CONFIRMATION_BITS) == 1,
+            MessageType::FarmCancel => Self::FarmCancel {
+                ally_champion_id: bits_to_champion(reader.take(CHAMPION_BITS)),
             },
             MessageType::FarmCollection => Self::FarmCollection {
                 camp_group_id: CampGroupID(reader.take(ID_BITS) as usize),

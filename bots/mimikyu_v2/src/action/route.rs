@@ -665,16 +665,16 @@ pub fn follow_route(
     state: &mut MovementState,
     champion_memory: &mut ChampionMemory,
     current_capabilities: Capabilities,
-) {
+) -> bool {
     if !state.allow_route {
-        return;
+        return false;
     }
 
     let position: Vec2 = me.position().unwrap();
 
     if state.route.is_none() {
         if state.route_failures >= MAX_ROUTE_FAILURES {
-            return;
+            return false;
         }
         state.route = champion_memory.map.router.plan(
             position,
@@ -685,12 +685,12 @@ pub fn follow_route(
         );
         if state.route.is_none() {
             state.route_failures += 1;
-            return;
+            return false;
         }
     }
 
     let Some(route): Option<&mut Route> = state.route.as_mut() else {
-        return;
+        return false;
     };
 
     let phase: Phase = route.advance(position, &champion_memory.map.distance_fields);
@@ -705,7 +705,10 @@ pub fn follow_route(
     if route_failed {
         state.route = None;
         state.route_failures += 1;
+        return false;
     }
+
+    true
 }
 
 pub fn walk_leg(
