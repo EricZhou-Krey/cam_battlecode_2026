@@ -20,7 +20,7 @@ pub mod movement;
 pub mod route;
 pub mod shop;
 
-pub const COMBAT_HEAL_SIGNAL_STRENGTH: u16 = 16;
+pub const COMBAT_HEAL_SIGNAL_STRENGTH: u16 = 15;
 pub const DANGER_HP_THRESHOLD: f32 = 0.3;
 pub const WARNING_HP_THRESHOLD: f32 = 0.6;
 
@@ -104,7 +104,7 @@ impl Action {
         }
 
         if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
-            let reply_reaction: Option<()>
+            let reply_reaction: Option<Self> = Self::reply_reaction(champion_memory);
         }
 
         if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
@@ -198,7 +198,8 @@ impl Action {
                     ally_champions_helping,
                     ..
                 } => {
-                    let helpers: Vec<ChampionType> = ally_champions_helping.into_iter().flatten().collect();
+                    let helpers: Vec<ChampionType> =
+                        ally_champions_helping.into_iter().flatten().collect();
                     // helpers = champions that accepted and are coming to camp_group_id
                     // If Helper is > 0  commit to the current movement
                     // Else see if you can fight the camp alone at your current hp, if you cannot
@@ -209,7 +210,7 @@ impl Action {
                     camp_group_id,
                     ally_champion_claiming,
                 } => {
-                    // Ally claiming is the one that was assign when message was given 
+                    // Ally claiming is the one that was assign when message was given
                     // ally should be the one claiming, but if the ally claiming is none then take
                     // it yourself
                 }
@@ -301,7 +302,9 @@ impl Action {
                     camp_group_id,
                     ally_champion_claiming,
                 } => {
-                    if max_precedence > ActionGroupType::EndFarm as i32 || ally_champion_claiming.is_some() {
+                    if max_precedence > ActionGroupType::EndFarm as i32
+                        || ally_champion_claiming.is_some()
+                    {
                         continue;
                     }
                     let location_id: LocationID = LocationID::CampGroup(*camp_group_id);
