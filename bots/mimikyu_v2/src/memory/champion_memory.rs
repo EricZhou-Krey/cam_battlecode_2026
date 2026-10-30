@@ -63,8 +63,7 @@ impl ChampionMemory {
         for received_message in &self.message_board.inbox {
             match received_message.message {
                 Message::FarmClear { camp_group_id } => {
-                    self.map.camp_group_respawn_timer[camp_group_id.0] =
-                        self.map.camp_group_reset_timer[camp_group_id.0];
+                    self.map.start_camp_group_respawn_timer(camp_group_id);
                 }
                 Message::FarmGoingToCamp {
                     camp_group_id,

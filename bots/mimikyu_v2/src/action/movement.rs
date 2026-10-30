@@ -1,5 +1,8 @@
 use crate::{
-    action::{Action, ActionGroupType},
+    action::{
+        route::{capabilities, dash_forward, follow_route, Capabilities, Route},
+        Action, ActionGroupType,
+    },
     memory::{champion_memory::ChampionMemory, CampGroupID, LocationID},
     sdk_interact::{champion::passive_active, map::step_with_fallback},
 };
@@ -9,6 +12,8 @@ pub const MOVE_PROXIMITY: u16 = 3;
 pub const RECALL_TIME: u16 = 5;
 pub const RECALL_TIME_HOME: u16 = 3;
 
+pub const MAX_ROUTE_FAILURES: u8 = 2;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MovementState {
     pub next_action: Box<Option<Action>>,
@@ -16,6 +21,9 @@ pub struct MovementState {
     pub location_id: LocationID,
     pub accepted_distance: u16,
     pub action_group_type: ActionGroupType,
+    pub route: Option<Route>,
+    pub route_failures: u8,
+    pub allow_route: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,20 +41,31 @@ impl MovementActions for Action {
             return;
         };
 
-        if !step_with_fallback(
-            &state.distance_field,
-            champion_memory
-                .map
-                .points_of_interest
-                .locate(state.location_id),
-        ) {
-            // TODO: Island / movement / exit fallback
+        let me: &Champion = cambc::self_champion().unwrap().unwrap();
+        if me.is_teleporting().unwrap_or(false) {
+            return;
         }
 
-        let new_position: Vec2 = cambc::self_champion().unwrap().unwrap().position().unwrap();
-        if state.distance_field.get(new_position).unwrap() <= state.accepted_distance {
+        let current_capabilities: Capabilities = capabilities(me);
+        let target_position: Vec2 = champion_memory
+            .map
+            .points_of_interest
+            .locate(state.location_id);
+
+        if step_with_fallback(&state.distance_field, target_position) {
+            state.route = None;
+            state.route_failures = 0;
+            dash_forward(me, state, champion_memory, current_capabilities);
+        } else {
+            follow_route(me, state, champion_memory, current_capabilities);
+        }
+
+        let new_position: Vec2 = me.position().unwrap();
+        let distance_to_goal: u16 = state.distance_field.get(new_position).unwrap_or(u16::MAX);
+        if distance_to_goal <= state.accepted_distance {
             let Some(valid_next_action): Option<Self> = state.next_action.take() else {
                 *self = Self::Idle;
+                self.turn(champion_memory);
                 return;
             };
             *self = valid_next_action;
@@ -89,7 +108,12 @@ impl MovementActions for Action {
                 location_id: LocationID::CampGroup(CampGroupID(0)),
                 accepted_distance: 0,
                 action_group_type: ActionGroupType::Survival,
+                route: None,
+                allow_route: false,
+                route_failures: 0,
             });
+        } else {
+            let _ = me.recall();
         }
     }
 }

@@ -12,11 +12,12 @@ use crate::{
     },
     sdk_interact::map::chebyshev_distance,
 };
-use cambc::{Champion, DistanceField, Vec2};
+use cambc::{Champion, ChampionType, DistanceField, Vec2};
 
 pub mod combat;
 pub mod farm;
 pub mod movement;
+pub mod route;
 pub mod shop;
 
 pub const COMBAT_HEAL_SIGNAL_STRENGTH: u16 = 16;
@@ -103,6 +104,10 @@ impl Action {
         }
 
         if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
+            let reply_reaction: Option<()>
+        }
+
+        if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
             let message_reaction: Option<(ReceivedMessage, Self)> = {
                 Self::message_reaction(champion_memory)
                     .map(|(received_message, reaction)| ((*received_message).clone(), reaction))
@@ -117,6 +122,13 @@ impl Action {
                         .champion_name()
                         .unwrap(),
                 );
+                reacted = true;
+                *self = reaction;
+            }
+        }
+
+        if !reacted && current_precedence < ActionGroupType::StartFarm as i32 {
+            if let Some(reaction) = Self::farm_reaction(champion_memory) {
                 *self = reaction;
             }
         }
@@ -138,6 +150,14 @@ impl Action {
             Action::DefendLocation(_) => self.defend(champion_memory),
             Action::EscapeToSpawn(_) => self.escape_to_spawn(champion_memory),
         }
+    }
+
+    fn farm_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
+        // Go towards closest farm that will respawn or has respawned since last and ask for
+        // proxmity for help, close, far signal strengths for camps with alot of danager,
+        // should check responses and prempt the movement if not enough champions reply and is
+        // unsafe, then choose a different camp that is not as dangerous perhaps.
+        todo!()
     }
 
     fn survival_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
@@ -165,6 +185,39 @@ impl Action {
         } else {
             None
         }
+    }
+
+    fn reply_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
+        let reaction: Option<Self> = None;
+        let replies: Vec<Message> = std::mem::take(&mut champion_memory.message_board.responses);
+
+        for reply in replies {
+            match reply {
+                Message::FarmHelp {
+                    camp_group_id,
+                    ally_champions_helping,
+                    ..
+                } => {
+                    let helpers: Vec<ChampionType> = ally_champions_helping.into_iter().flatten().collect();
+                    // helpers = champions that accepted and are coming to camp_group_id
+                    // If Helper is > 0  commit to the current movement
+                    // Else see if you can fight the camp alone at your current hp, if you cannot
+                    // then change back to idle and try again, add a dirty flag to attempted ones
+                    // aswell
+                }
+                Message::FarmCollection {
+                    camp_group_id,
+                    ally_champion_claiming,
+                } => {
+                    // Ally claiming is the one that was assign when message was given 
+                    // ally should be the one claiming, but if the ally claiming is none then take
+                    // it yourself
+                }
+                _ => (),
+            }
+        }
+
+        reaction
     }
 
     fn combat_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
@@ -238,14 +291,17 @@ impl Action {
                             location_id,
                             accepted_distance: MOVE_PROXIMITY,
                             action_group_type: ActionGroupType::StartFarm,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }
                 Message::FarmCollection {
                     camp_group_id,
-                    ally_champion_claiming: _,
+                    ally_champion_claiming,
                 } => {
-                    if max_precedence > ActionGroupType::EndFarm as i32 {
+                    if max_precedence > ActionGroupType::EndFarm as i32 || ally_champion_claiming.is_some() {
                         continue;
                     }
                     let location_id: LocationID = LocationID::CampGroup(*camp_group_id);
@@ -269,6 +325,9 @@ impl Action {
                             location_id,
                             accepted_distance: 0,
                             action_group_type: ActionGroupType::EndFarm,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }
@@ -303,6 +362,9 @@ impl Action {
                             location_id: *location_id,
                             accepted_distance: MOVE_PROXIMITY,
                             action_group_type: ActionGroupType::Support,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }
@@ -336,6 +398,9 @@ impl Action {
                             location_id: *location_id,
                             accepted_distance: MOVE_PROXIMITY,
                             action_group_type: ActionGroupType::Support,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }
@@ -369,6 +434,9 @@ impl Action {
                             location_id: *location_id,
                             accepted_distance: MOVE_PROXIMITY,
                             action_group_type: ActionGroupType::Support,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }
@@ -401,6 +469,9 @@ impl Action {
                             location_id: *location_id,
                             accepted_distance: MOVE_PROXIMITY,
                             action_group_type: ActionGroupType::Support,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }
@@ -426,6 +497,9 @@ impl Action {
                             location_id: *location_id,
                             accepted_distance: MOVE_PROXIMITY,
                             action_group_type: ActionGroupType::Support,
+                            route: None,
+                            route_failures: 0,
+                            allow_route: true,
                         }),
                     ));
                 }

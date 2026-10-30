@@ -1,5 +1,5 @@
 use crate::{
-    action::combat::estimator::CampTypeAttackOrder,
+    action::{combat::estimator::CampTypeAttackOrder, route::RoutePlanner},
     draft::draft_memory::DraftMemory,
     memory::{AltarID, CampGroupID, CampID, ControlPointID, LocationID, ShortcutID},
     sdk_interact::map::Center,
@@ -299,6 +299,7 @@ impl LazyPointsOfInterest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LazyMap {
     pub distance_fields: LazyDistanceFields,
+    pub router: RoutePlanner,
 
     // Indexed by CampGroupID.0
     pub camp_group_attack_order: Vec<Vec<CampID>>,
@@ -413,9 +414,12 @@ impl LazyMap {
 
         let distance_fields: LazyDistanceFields =
             LazyDistanceFields::new(draft_memory, &points_of_interest);
+        let router: RoutePlanner =
+            RoutePlanner::new(&points_of_interest, &distance_fields.blocked_bitboard);
 
         Self {
             distance_fields,
+            router,
 
             camp_group_attack_order,
             camp_group_reset_timer,
