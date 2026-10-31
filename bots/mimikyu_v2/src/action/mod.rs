@@ -108,6 +108,7 @@ impl Action {
 
         if !reacted && current_precedence < ActionGroupType::EndFarm as i32 {
             if let Some(reaction) = Self::reply_reaction(champion_memory) {
+                reacted = true;
                 *self = reaction;
             }
         }
@@ -292,7 +293,9 @@ impl Action {
                     };
 
                     reaction = Some(Self::MoveToLocation(MovementState {
-                        next_action: Box::new(Some(Self::CollectingFromCamp(CollectionState {}))),
+                        next_action: Box::new(Some(Self::CollectingFromCamp(
+                            CollectionState::new(camp_group_id),
+                        ))),
                         distance_field,
                         location_id,
                         accepted_distance: 0,
@@ -321,7 +324,7 @@ impl Action {
             };
 
             if chebyshev_distance(me_position, enemy_position) as u16 <= COMBAT_PROXIMITY {
-                reaction = Some(Self::InChampionComabtKill(ChampionCombatState {}));
+                reaction = Some(Self::InChampionComabtKill(ChampionCombatState::new()));
             }
         }
 
@@ -427,7 +430,7 @@ impl Action {
                         received_message,
                         Self::MoveToLocation(MovementState {
                             next_action: Box::new(Some(Self::CollectingFromCamp(
-                                CollectionState {},
+                                CollectionState::new(*camp_group_id),
                             ))),
                             distance_field,
                             location_id,
@@ -463,9 +466,7 @@ impl Action {
                     reaction = Some((
                         received_message,
                         Self::MoveToLocation(MovementState {
-                            next_action: Box::new(Some(Self::CollectingFromCamp(
-                                CollectionState {},
-                            ))),
+                            next_action: Box::new(None),
                             distance_field,
                             location_id: *location_id,
                             accepted_distance: MOVE_PROXIMITY,

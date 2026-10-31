@@ -77,7 +77,7 @@ impl ActionBuyExtension for Action {
         let me: &Champion = cambc::self_champion().unwrap().unwrap();
         let _ = me.buy_consumable(ConsumableType::TpCrystal);
         let _ = me.buy_consumable(cambc::ConsumableType::AltarLock);
-        while me.gold_count().unwrap() >= 30 {
+        while me.gold_count().unwrap() >= 30 && me.can_buy(ItemType::HomeShardOfFocus, 1).unwrap() {
             let buy_item: ItemType = match me.champion_name().unwrap() {
                 ChampionType::Willow => item_from_type_stat(
                     SURVIVAL_ITEM_FAMILY[(champion_memory.buy_index / 5) % 14],

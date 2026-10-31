@@ -1,4 +1,5 @@
-use crate::action::Action;
+use crate::action::route::{CrossKind, Leg, Route};
+use crate::action::{Action, ActionGroupType};
 use crate::memory::message::messages::{Message, MessageType};
 use crate::sdk_interact::map::{chebyshev_distance, Center};
 use crate::{
@@ -478,26 +479,6 @@ fn safe_locate(memory: &ChampionMemory, location_id: LocationID) -> Option<Vec2>
     }
 }
 
-fn message_location(memory: &ChampionMemory, message: &Message) -> Option<Vec2> {
-    let points_of_interest = &memory.map.points_of_interest;
-    match message {
-        Message::FarmClear { camp_group_id }
-        | Message::FarmHelp { camp_group_id, .. }
-        | Message::FarmCollection { camp_group_id, .. }
-        | Message::FarmGoingToCamp { camp_group_id, .. } => points_of_interest
-            .camp_group_centers
-            .get(camp_group_id.0)
-            .copied(),
-        Message::CombatHeal { location_id, .. }
-        | Message::CombatLosingFightNeedHelp { location_id, .. }
-        | Message::CombatWinningFightWantHelp { location_id, .. }
-        | Message::StatusAllyLocation { location_id, .. }
-        | Message::StatusEnemyLocation { location_id, .. }
-        | Message::GroupTogether { location_id } => safe_locate(memory, *location_id),
-        _ => None,
-    }
-}
-
 fn message_responders(message: &Message) -> Vec<ChampionType> {
     match message {
         Message::FarmHelp {
@@ -525,53 +506,6 @@ fn describe_responders(message: &Message) -> String {
         String::from(" | no responders yet")
     } else {
         format!(" | responders {:?}", responders)
-    }
-}
-
-fn draw_message(memory: &ChampionMemory, message: &Message) {
-    cambc::debug_block! {
-        let location: Option<Vec2> = message_location(memory, message);
-
-        if let Some(center) = location {
-            match message {
-                Message::FarmClear { .. } => draw_cross(center, 2, GREY),
-                Message::FarmHelp { signal_strength, .. } => {
-                    draw_circle(center, *signal_strength as f32, LIGHT_GREEN)
-                }
-                Message::CombatHeal { signal_strength, .. } => {
-                    draw_circle(center, *signal_strength as f32, LIGHT_GREEN)
-                }
-                Message::CombatLosingFightNeedHelp { signal_strength, .. } => {
-                    draw_circle(center, *signal_strength as f32, RED)
-                }
-                Message::CombatWinningFightWantHelp { signal_strength, .. } => {
-                    draw_circle(center, *signal_strength as f32, LIGHT_RED)
-                }
-                Message::StatusAllyLocation { .. } => draw_circle(center, 2.0, LIGHT_GREEN),
-                Message::StatusEnemyLocation { .. } => draw_circle(center, 2.0, LIGHT_RED),
-                Message::GroupTogether { .. } => draw_circle(center, 15.0, PURPLE),
-                _ => (),
-            }
-
-            let line_color: u32 = match message {
-                Message::FarmHelp { .. } => LIGHT_GREEN,
-                Message::FarmCollection { .. } => ORANGE,
-                Message::CombatLosingFightNeedHelp { .. } => RED,
-                Message::CombatWinningFightWantHelp { .. } => LIGHT_RED,
-                _ => WHITE,
-            };
-            for champion in message_responders(message) {
-                let responder_location: Option<Vec2> = memory
-                    .champion_info
-                    .ally
-                    .get(&champion)
-                    .and_then(|info| info.last_seen);
-                if let Some(point) = responder_location {
-                    let _ = cambc::debug::draw_line(point, center, line_color);
-                    let _ = cambc::debug::draw_dot(point, COLOR_ALLY_CHAMPION);
-                }
-            }
-        }
     }
 }
 
@@ -735,17 +669,348 @@ pub fn debug_champion_turn(memory: &ChampionMemory) {
     draw_points_of_interest(memory);
 }
 
-pub fn debug_current_action(action: &Action, _memory: &ChampionMemory) {
+fn message_location_id(message: &Message) -> Option<LocationID> {
+    match message {
+        Message::FarmClear { camp_group_id }
+        | Message::FarmHelp { camp_group_id, .. }
+        | Message::FarmCollection { camp_group_id, .. }
+        | Message::FarmGoingToCamp { camp_group_id, .. } => {
+            Some(LocationID::CampGroup(*camp_group_id))
+        }
+        Message::CombatHeal { location_id, .. }
+        | Message::CombatLosingFightNeedHelp { location_id, .. }
+        | Message::CombatWinningFightWantHelp { location_id, .. }
+        | Message::CombatTargetEnemy { location_id, .. }
+        | Message::StatusAllyLocation { location_id, .. }
+        | Message::StatusEnemyLocation { location_id, .. }
+        | Message::GroupTogether { location_id } => Some(*location_id),
+        _ => None,
+    }
+}
+
+fn message_signal_strength(message: &Message) -> Option<u16> {
+    match message {
+        Message::FarmHelp {
+            signal_strength, ..
+        }
+        | Message::CombatHeal {
+            signal_strength, ..
+        }
+        | Message::CombatLosingFightNeedHelp {
+            signal_strength, ..
+        }
+        | Message::CombatWinningFightWantHelp {
+            signal_strength, ..
+        }
+        | Message::CombatTargetEnemy {
+            signal_strength, ..
+        } => Some(*signal_strength),
+        _ => None,
+    }
+}
+
+fn message_color(message: &Message) -> u32 {
+    match message {
+        Message::FarmClear { .. } => GREY,
+        Message::FarmHelp { .. } => LIGHT_GREEN,
+        Message::FarmCollection { .. } => ORANGE,
+        Message::CombatHeal { .. } => YELLOW,
+        Message::CombatLosingFightNeedHelp { .. } => RED,
+        Message::CombatWinningFightWantHelp { .. } => LIGHT_RED,
+        Message::CombatTargetEnemy { .. } => PINK,
+        Message::GroupTogether { .. } => PURPLE,
+        Message::StatusAllyLocation { .. } => LIGHT_GREEN,
+        Message::StatusEnemyLocation { .. } => LIGHT_RED,
+        _ => WHITE,
+    }
+}
+
+fn action_group_color(action_group_type: ActionGroupType) -> u32 {
+    match action_group_type {
+        ActionGroupType::StartFarm => LIGHT_GREEN,
+        ActionGroupType::EndFarm => ORANGE,
+        ActionGroupType::Support => RED,
+        ActionGroupType::ChampionCombat => LIGHT_RED,
+        ActionGroupType::Survival => YELLOW,
+        ActionGroupType::Intermediate => WHITE,
+    }
+}
+
+fn draw_ping_area(
+    memory: &ChampionMemory,
+    location_id: LocationID,
+    center: Vec2,
+    signal_strength: u16,
+    color: u32,
+) {
+    cambc::debug_block! {
+        match memory.map.distance_fields.weak_get(location_id) {
+            Some(field) => {
+                let radius: i32 = signal_strength as i32;
+                for delta_y in -radius..=radius {
+                    for delta_x in -radius..=radius {
+                        let tile: Vec2 = Vec2 {
+                            x: center.x + delta_x,
+                            y: center.y + delta_y,
+                        };
+                        if field
+                            .get(tile)
+                            .is_ok_and(|distance| distance == signal_strength)
+                        {
+                            let _ = cambc::debug::draw_dot(tile, color);
+                        }
+                    }
+                }
+            }
+            None => draw_circle(center, signal_strength as f32, color),
+        }
+        draw_cross(center, 1, color);
+    }
+}
+
+fn inside_ping_area(
+    memory: &ChampionMemory,
+    location_id: LocationID,
+    center: Vec2,
+    position: Vec2,
+    signal_strength: u16,
+) -> bool {
+    match memory.map.distance_fields.weak_get(location_id) {
+        Some(field) => field
+            .get(position)
+            .is_ok_and(|distance| distance <= signal_strength),
+        None => {
+            let distance: i32 = chebyshev_distance(center, position).into();
+            distance <= signal_strength as i32
+        }
+    }
+}
+
+fn draw_message(memory: &ChampionMemory, message: &Message) {
+    cambc::debug_block! {
+        if let Some(location_id) = message_location_id(message) {
+            if let Some(center) = safe_locate(memory, location_id) {
+                let color: u32 = message_color(message);
+                let signal_strength: Option<u16> = message_signal_strength(message);
+
+                match message {
+                    Message::FarmClear { .. } => draw_cross(center, 2, color),
+                    Message::GroupTogether { .. } => draw_circle(center, 15.0, color),
+                    Message::StatusAllyLocation { .. } | Message::StatusEnemyLocation { .. } => {
+                        draw_circle(center, 2.0, color)
+                    }
+                    _ => (),
+                }
+                if let Some(strength) = signal_strength {
+                    draw_ping_area(memory, location_id, center, strength, color);
+                }
+
+                let responders: Vec<ChampionType> = message_responders(message);
+                for (champion, info) in memory.champion_info.ally.iter() {
+                    let Some(position) = info.last_seen else {
+                        continue;
+                    };
+                    let reacted: bool = responders.contains(champion);
+                    let in_range: bool = signal_strength.is_some_and(|strength| {
+                        inside_ping_area(memory, location_id, center, position, strength)
+                    });
+
+                    if reacted {
+                        let _ = cambc::debug::draw_line(position, center, color);
+                        let _ = cambc::debug::draw_dot(position, COLOR_ALLY_CHAMPION);
+                    } else if in_range {
+                        let _ = cambc::debug::draw_dot(position, GREY);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn draw_reaction(memory: &ChampionMemory, location_id: LocationID, action_group: ActionGroupType) {
+    cambc::debug_block! {
+        if let (Ok(Some(me)), Some(center)) =
+            (cambc::self_champion(), safe_locate(memory, location_id))
+        {
+            if let Ok(position) = me.position() {
+                let triggering_color: Option<u32> = memory
+                    .message_board
+                    .inbox
+                    .iter()
+                    .map(|received| &received.message)
+                    .chain(memory.message_board.responses.iter())
+                    .find(|message| {
+                        message_location_id(message) == Some(location_id)
+                            && (message_signal_strength(message).is_some()
+                                || matches!(message, Message::FarmCollection { .. }))
+                    })
+                    .map(message_color);
+                let color: u32 = triggering_color.unwrap_or(action_group_color(action_group));
+
+                let _ = cambc::debug::draw_line(position, center, color);
+                let _ = cambc::debug::draw_dot(position, COLOR_ALLY_CHAMPION);
+            }
+        }
+    }
+}
+fn describe_leg(leg: &Leg) -> String {
+    match leg {
+        Leg::Walk { via, accepted } => {
+            format!("walk to {:?} until within {} tiles", via, accepted)
+        }
+        Leg::Cross { from, to, kind } => {
+            let kind_name: &str = match kind {
+                CrossKind::Dash => "dash",
+                CrossKind::Teleport => "teleport",
+            };
+            format!(
+                "{} from ({}, {}) to ({}, {})",
+                kind_name, from.x, from.y, to.x, to.y
+            )
+        }
+    }
+}
+
+fn print_route(route: &Route) {
+    println!(
+        "  route: {} legs, on leg {}, estimated {} turns",
+        route.legs.len(),
+        route.cursor,
+        route.est_turns
+    );
+    for (leg_index, leg) in route.legs.iter().enumerate() {
+        let marker: &str = if leg_index == route.cursor { ">" } else { " " };
+        println!("   {} {:>2}: {}", marker, leg_index, describe_leg(leg));
+        if let Leg::Cross { from, to, kind } = leg {
+            let line_color: u32 = match kind {
+                CrossKind::Dash => COLOR_SHORT_JUMP,
+                CrossKind::Teleport => COLOR_LONG_JUMP,
+            };
+            let _ = cambc::debug::draw_line(*from, *to, line_color);
+        }
+    }
+}
+
+fn describe_progress(memory: &ChampionMemory, location_id: LocationID) -> String {
+    let Some(target) = safe_locate(memory, location_id) else {
+        return format!("target {:?} has no known location", location_id);
+    };
+    let Ok(Some(me)) = cambc::self_champion() else {
+        return format!(
+            "target {:?} at {}",
+            location_id,
+            describe_location(Some(target))
+        );
+    };
+    let Ok(position) = me.position() else {
+        return format!(
+            "target {:?} at {}",
+            location_id,
+            describe_location(Some(target))
+        );
+    };
+    let straight_distance: i32 = chebyshev_distance(target, position).into();
+    let walking_distance: Option<u16> = memory
+        .map
+        .distance_fields
+        .weak_get(location_id)
+        .and_then(|field| field.get(position).ok())
+        .filter(|distance| *distance != u16::MAX);
+    format!(
+        "target {:?} at {}, we are at {}, straight line {} tiles, walking {}",
+        location_id,
+        describe_location(Some(target)),
+        describe_location(Some(position)),
+        straight_distance,
+        match walking_distance {
+            Some(distance) => format!("{} tiles", distance),
+            None => String::from("unknown (field not cached or unreachable)"),
+        },
+    )
+}
+
+fn print_camp_group_details(memory: &ChampionMemory, camp_group_id: usize) {
+    let map = &memory.map;
+    let (Some(center), Some(attack_order)) = (
+        map.points_of_interest.camp_group_centers.get(camp_group_id),
+        map.camp_group_attack_order.get(camp_group_id),
+    ) else {
+        println!("  camp group {} is not in the map", camp_group_id);
+        return;
+    };
+    println!(
+        "  camp group {} at ({}, {}) respawn {} hp {} dmg {} gem {} gold {} attack_order {:?}",
+        camp_group_id,
+        center.x,
+        center.y,
+        map.camp_group_respawn_timer[camp_group_id],
+        map.camp_group_effective_hp[camp_group_id],
+        map.camp_group_damage_per_round[camp_group_id],
+        map.camp_group_gem_value[camp_group_id],
+        map.camp_group_gold_value[camp_group_id],
+        attack_order,
+    );
+}
+
+pub fn print_current_action(action: &Action, memory: &ChampionMemory) {
+    cambc::debug_block! {
+        println!("== CURRENT ACTION ==");
+        println!("The action is what this champion is doing this turn. Each action belongs to an action group, which is the category the strategy uses to decide what to do next. Move actions follow a distance field to a location, either directly or along a planned route of walk, dash and teleport legs.");
+        println!("On the map: a mint dot marks this champion with a line to its target, coloured by the message that triggered it or by its action group. Dash legs of a route are blue lines and teleport legs are magenta lines.");
+        println!("Sections: the action and its state, progress towards the target (straight line and walking distance), then the route or camp group values where they apply.");
+
+        match action {
+            Action::MoveToLocation(state) => {
+                println!("Action: MoveToLocation in group {:?}", state.action_group_type);
+                println!("  {}", describe_progress(memory, state.location_id));
+                println!(
+                    "  accepted distance {} route allowed {} route failures {}",
+                    state.accepted_distance, state.allow_route, state.route_failures,
+                );
+                match &state.route {
+                    Some(route) => print_route(route),
+                    None => println!("  route: none, walking the distance field directly"),
+                }
+            }
+            Action::DefendLocation(state) => {
+                println!("Action: DefendLocation");
+                println!("  {}", describe_progress(memory, state.location_id));
+                println!("  state {:?}", state);
+            }
+            Action::InCampGroupCombat(state) => {
+                println!("Action: InCampGroupCombat");
+                print_camp_group_details(memory, state.camp_group_id.0);
+                println!("  state {:?}", state);
+            }
+            Action::CollectingFromCamp(state) => {
+                println!("Action: CollectingFromCamp");
+                print_camp_group_details(memory, state.camp_group_id.0);
+                println!("  state {:?}", state);
+            }
+            other => println!("Action: {:?}", other),
+        }
+    }
+}
+
+pub fn debug_current_action(action: &Action, memory: &ChampionMemory) {
+    print_current_action(action, memory);
     match action {
-        Action::Idle => (),
-        Action::MoveToLocation { .. } => (),
-        Action::CollectingFromCamp { .. } => (),
-        Action::InChampionComabtKill { .. } => (),
-        Action::InChampionCombatStall { .. } => (),
-        Action::InChampionCombatEscape { .. } => (),
-        Action::InCampGroupCombat { .. } => (),
-        Action::TributingAtAltar { .. } => (),
-        Action::DefendLocation { .. } => (),
-        Action::EscapeToSpawn { .. } => (),
+        Action::MoveToLocation(state) => {
+            draw_reaction(memory, state.location_id, state.action_group_type)
+        }
+        Action::DefendLocation(state) => {
+            draw_reaction(memory, state.location_id, ActionGroupType::Support)
+        }
+        Action::InCampGroupCombat(state) => draw_reaction(
+            memory,
+            LocationID::CampGroup(state.camp_group_id),
+            ActionGroupType::EndFarm,
+        ),
+        Action::CollectingFromCamp(state) => draw_reaction(
+            memory,
+            LocationID::CampGroup(state.camp_group_id),
+            ActionGroupType::EndFarm,
+        ),
+        _ => (),
     }
 }

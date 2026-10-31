@@ -3,9 +3,10 @@ use crate::{
     draft::draft_memory::DraftMemory,
     memory::{AltarID, CampGroupID, CampID, ControlPointID, LocationID, ShortcutID},
     sdk_interact::map::Center,
+    util::fast_hash::FastHashMap,
 };
 use cambc::{Bitboard, Camp, DistanceField, Team, Vec2};
-use std::collections::{HashMap, VecDeque};
+use std::{cell::OnceCell, collections::VecDeque};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LazyDistanceFields {
@@ -109,12 +110,21 @@ impl LazyDistanceFields {
         }
     }
 
+    fn is_valid(&self, location_id: LocationID) -> bool {
+        match location_id {
+            LocationID::CampGroup(id) => id.0 < self.camp_group_distance_fields.len(),
+            LocationID::Altar(id) => id.0 < self.altar_distance_fields.len(),
+            LocationID::Shortcut(id) => id.0 < self.shortcut_point_distance_fields.len(),
+            LocationID::ControlPoint(id) => id.0 < self.control_point_distance_fields.len(),
+        }
+    }
+
     pub fn weak_get(&self, location_id: LocationID) -> Option<&DistanceField> {
         match location_id {
-            LocationID::CampGroup(id) => self.camp_group_distance_fields[id.0].as_ref(),
-            LocationID::Altar(id) => self.altar_distance_fields[id.0].as_ref(),
-            LocationID::Shortcut(id) => self.shortcut_point_distance_fields[id.0].as_ref(),
-            LocationID::ControlPoint(id) => self.control_point_distance_fields[id.0].as_ref(),
+            LocationID::CampGroup(id) => self.camp_group_distance_fields.get(id.0)?.as_ref(),
+            LocationID::Altar(id) => self.altar_distance_fields.get(id.0)?.as_ref(),
+            LocationID::Shortcut(id) => self.shortcut_point_distance_fields.get(id.0)?.as_ref(),
+            LocationID::ControlPoint(id) => self.control_point_distance_fields.get(id.0)?.as_ref(),
         }
     }
 
@@ -143,6 +153,9 @@ impl LazyDistanceFields {
         };
         if self.discovered_this_round {
             return self.weak_get(location_id);
+        }
+        if !self.is_valid(location_id) {
+            return None;
         }
 
         let mut distance_field: DistanceField = DistanceField::new().unwrap();
@@ -189,11 +202,9 @@ pub struct LazyPointsOfInterest {
     pub control_points: Vec<Vec2>,
     // Indexed by ShortcutID.0
     pub shortcut_points: Vec<Vec2>,
-    pub shortcuts: HashMap<Vec2, Vec2>, // bi-direction (from, to)
-
-    pub closest_point_of_interest: HashMap<Vec2, Option<LocationID>>,
-
-    pub points_of_interest_bitboard: Bitboard,
+    pub shortcuts: FastHashMap<Vec2, Vec2>,
+    pub closest_point_of_interest: FastHashMap<Vec2, Option<LocationID>>,
+    points_of_interest_bitboard_cache: OnceCell<Bitboard>,
 }
 
 impl LazyPointsOfInterest {
@@ -202,25 +213,10 @@ impl LazyPointsOfInterest {
         camp_group_centers: Vec<Vec2>,
         altar_locations: Vec<Vec2>,
         control_points: Vec<Vec2>,
-        shortcuts: HashMap<Vec2, Vec2>,
+        shortcuts: FastHashMap<Vec2, Vec2>,
     ) -> Self {
-        let shortcut_points: Vec<Vec2> = shortcuts.keys().copied().collect();
-        let mut points_of_interest_bitboard: Bitboard = Bitboard::new().unwrap();
-
-        for &point in &control_points {
-            let _ = points_of_interest_bitboard.set(point, true);
-        }
-        for &point in &altar_locations {
-            let _ = points_of_interest_bitboard.set(point, true);
-        }
-        for &point in shortcuts.keys() {
-            let _ = points_of_interest_bitboard.set(point, true);
-        }
-        for &point in &camp_group_centers {
-            let _ = points_of_interest_bitboard.set(point, true);
-        }
-
-        let closest_point_of_interest: HashMap<Vec2, Option<LocationID>> = HashMap::new();
+        let mut shortcut_points: Vec<Vec2> = shortcuts.keys().copied().collect();
+        shortcut_points.sort_unstable_by_key(|point| (point.x, point.y));
 
         LazyPointsOfInterest {
             camp_group_spawn_tiles,
@@ -229,8 +225,8 @@ impl LazyPointsOfInterest {
             control_points,
             shortcut_points,
             shortcuts,
-            closest_point_of_interest,
-            points_of_interest_bitboard,
+            closest_point_of_interest: FastHashMap::default(),
+            points_of_interest_bitboard_cache: OnceCell::new(),
         }
     }
 
@@ -241,6 +237,22 @@ impl LazyPointsOfInterest {
             LocationID::ControlPoint(id) => self.control_points[id.0],
             LocationID::Shortcut(id) => self.shortcut_points[id.0],
         }
+    }
+
+    pub fn points_of_interest_bitboard(&self) -> &Bitboard {
+        self.points_of_interest_bitboard_cache.get_or_init(|| {
+            let mut bitboard: Bitboard = Bitboard::new().unwrap();
+            for &point in self
+                .control_points
+                .iter()
+                .chain(&self.altar_locations)
+                .chain(&self.shortcut_points)
+                .chain(&self.camp_group_centers)
+            {
+                let _ = bitboard.set(point, true);
+            }
+            bitboard
+        })
     }
 
     pub fn try_get_closest_poi(
@@ -317,71 +329,61 @@ pub struct LazyMap {
 impl LazyMap {
     pub fn new(draft_memory: &DraftMemory) -> Self {
         let camp_group_count: usize = draft_memory.camp_memory.camp_group_count as usize;
-        let camp_group_spawn_tiles: Vec<Bitboard> = cambc::map::camp_groups()
-            .unwrap()
-            .into_iter()
-            .take(camp_group_count)
-            .map(|camp_group| camp_group.spawn_tiles().unwrap())
-            .collect();
-        let camp_group_centers: Vec<Vec2> = cambc::map::camp_groups()
-            .unwrap()
-            .into_iter()
-            .take(camp_group_count)
-            .map(|camp_group| {
-                let center: [u8; 2] = camp_group.spawn_tiles().unwrap().center();
-                Vec2 {
-                    x: center[0] as i32,
-                    y: center[1] as i32,
-                }
-            })
-            .collect();
-        let camp_group_attack_order: Vec<Vec<CampID>> = cambc::map::camp_groups()
-            .unwrap()
-            .iter()
-            .map(|camp_group| {
-                let camps: &[Camp] = camp_group.camps();
-                let n_camps: usize = camps.len();
-                let mut camp_ids: Vec<CampID> = (0..n_camps).map(CampID).collect();
-                camp_ids.sort_unstable_by_key(|camp_id| {
-                    CampTypeAttackOrder::from(camps[camp_id.0].kind()) as usize
-                });
-                camp_ids
-            })
-            .collect();
-        let camp_group_reset_timer: Vec<i32> = cambc::map::camp_groups()
-            .unwrap()
-            .into_iter()
-            .take(camp_group_count)
-            .map(|camp_group| camp_group.max_respawn_timer())
-            .collect();
+        let all_camp_groups = cambc::map::camp_groups().unwrap();
+
+        let mut camp_group_spawn_tiles: Vec<Bitboard> = Vec::with_capacity(camp_group_count);
+        let mut camp_group_centers: Vec<Vec2> = Vec::with_capacity(camp_group_count);
+        let mut camp_group_reset_timer: Vec<i32> = Vec::with_capacity(camp_group_count);
+        let mut camp_group_attack_order: Vec<Vec<CampID>> = Vec::with_capacity(camp_group_count);
+
+        for camp_group in all_camp_groups.iter().take(camp_group_count) {
+            let camps: &[Camp] = camp_group.camps();
+            let attack_keys: Vec<usize> = camps
+                .iter()
+                .map(|camp| CampTypeAttackOrder::from(camp.kind()) as usize)
+                .collect();
+            let mut camp_ids: Vec<CampID> = (0..camps.len()).map(CampID).collect();
+            camp_ids.sort_unstable_by_key(|camp_id| attack_keys[camp_id.0]);
+            camp_group_attack_order.push(camp_ids);
+
+            let spawn_tiles: Bitboard = camp_group.spawn_tiles().unwrap();
+            let center: [u8; 2] = spawn_tiles.center();
+            camp_group_centers.push(Vec2 {
+                x: center[0] as i32,
+                y: center[1] as i32,
+            });
+            camp_group_spawn_tiles.push(spawn_tiles);
+            camp_group_reset_timer.push(camp_group.max_respawn_timer());
+        }
+
         let camp_group_respawn_timer: Vec<i32> = vec![0; camp_group_count];
         let camp_group_effective_hp: Vec<f32> = draft_memory
             .camp_memory
             .camp_group_effective_hp
-            .into_iter()
+            .iter()
             .take(camp_group_count)
-            .map(|u16_bytes| u16_bytes as f32)
+            .map(|&u16_bytes| u16_bytes as f32)
             .collect();
         let camp_group_damage_per_round: Vec<f32> = draft_memory
             .camp_memory
             .camp_group_damage_per_round
-            .into_iter()
+            .iter()
             .take(camp_group_count)
-            .map(|u8_byte| u8_byte as f32)
+            .map(|&u8_byte| u8_byte as f32)
             .collect();
         let camp_group_gem_value: Vec<u32> = draft_memory
             .camp_memory
             .camp_group_gem_value
-            .into_iter()
+            .iter()
             .take(camp_group_count)
-            .map(|u16_bytes| u16_bytes as u32)
+            .map(|&u16_bytes| u16_bytes as u32)
             .collect();
         let camp_group_gold_value: Vec<u32> = draft_memory
             .camp_memory
             .camp_group_gold_value
-            .into_iter()
+            .iter()
             .take(camp_group_count)
-            .map(|u16_bytes| u16_bytes as u32)
+            .map(|&u16_bytes| u16_bytes as u32)
             .collect();
 
         let altar_locations: Vec<Vec2> = cambc::map::altars().unwrap().positions().unwrap();
@@ -389,20 +391,15 @@ impl LazyMap {
         let control_points: Vec<Vec2> = draft_memory
             .control_point_memory
             .control_points
-            .into_iter()
-            .filter_map(|control_point| {
-                if control_point != [0, 0] {
-                    Some(Vec2 {
-                        x: control_point[0] as i32,
-                        y: control_point[1] as i32,
-                    })
-                } else {
-                    None
-                }
+            .iter()
+            .filter(|control_point| **control_point != [0, 0])
+            .map(|control_point| Vec2 {
+                x: control_point[0] as i32,
+                y: control_point[1] as i32,
             })
             .collect();
 
-        let shortcuts: HashMap<Vec2, Vec2> = draft_memory.shortcut_memory.decoded_shortcuts();
+        let shortcuts: FastHashMap<Vec2, Vec2> = draft_memory.shortcut_memory.decoded_shortcuts();
 
         let points_of_interest: LazyPointsOfInterest = LazyPointsOfInterest::new(
             camp_group_spawn_tiles,
@@ -414,6 +411,7 @@ impl LazyMap {
 
         let distance_fields: LazyDistanceFields =
             LazyDistanceFields::new(draft_memory, &points_of_interest);
+
         let router: RoutePlanner =
             RoutePlanner::new(&points_of_interest, &distance_fields.blocked_bitboard);
 

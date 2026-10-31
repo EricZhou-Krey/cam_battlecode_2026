@@ -1,6 +1,8 @@
-use crate::{draft::draft_memory::DraftMemoryBlock, sdk_interact::map::chebyshev_distance};
+use crate::{
+    draft::draft_memory::DraftMemoryBlock, sdk_interact::map::chebyshev_distance,
+    util::fast_hash::FastHashMap,
+};
 use cambc::{Bitboard, DistanceField, Team, Vec2};
-use std::collections::HashMap;
 
 pub const MAX_SHORTCUTS: usize = 64;
 
@@ -219,22 +221,23 @@ impl ShortcutDraftBlock {
         }
     }
 
-    pub fn decoded_shortcuts(&self) -> HashMap<Vec2, Vec2> {
-        self.shortcuts
-            .iter()
-            .take(self.shortcut_count as usize)
-            .flat_map(|entry: &[u8; 3]| {
-                let from: Vec2 = Vec2 {
-                    x: entry[0] as i32,
-                    y: entry[1] as i32,
-                };
-                let to: Vec2 = Vec2 {
-                    x: from.x + (entry[2] >> 4) as i32 - OFFSET_BIAS,
-                    y: from.y + (entry[2] & 0x0F) as i32 - OFFSET_BIAS,
-                };
-                [(from, to), (to, from)]
-            })
-            .collect()
+    pub fn decoded_shortcuts(&self) -> FastHashMap<Vec2, Vec2> {
+        let shortcut_count: usize = (self.shortcut_count as usize).min(self.shortcuts.len());
+        let mut decoded_shortcuts: FastHashMap<Vec2, Vec2> =
+            FastHashMap::with_capacity_and_hasher(shortcut_count * 2, Default::default());
+        for entry in self.shortcuts.iter().take(shortcut_count) {
+            let from: Vec2 = Vec2 {
+                x: entry[0] as i32,
+                y: entry[1] as i32,
+            };
+            let to: Vec2 = Vec2 {
+                x: from.x + (entry[2] >> 4) as i32 - OFFSET_BIAS,
+                y: from.y + (entry[2] & 0x0F) as i32 - OFFSET_BIAS,
+            };
+            decoded_shortcuts.insert(from, to);
+            decoded_shortcuts.insert(to, from);
+        }
+        decoded_shortcuts
     }
 }
 

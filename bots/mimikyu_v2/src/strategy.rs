@@ -54,9 +54,11 @@ impl Strategy {
                         .lazy_discover(&champion_memory.map.points_of_interest);
                     champion_memory.message_board.flush();
 
-                    //debug_champion_turn(&champion_memory);
-                    debug_current_action(&current_action, &champion_memory);
-
+                    // crate::sdk_interact::debug::debug_champion_turn(&champion_memory);
+                    crate::sdk_interact::debug::debug_current_action(
+                        &current_action,
+                        &champion_memory,
+                    );
                     cambc::end_turn();
                 }
             }

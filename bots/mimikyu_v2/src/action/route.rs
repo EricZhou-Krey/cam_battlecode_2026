@@ -16,7 +16,6 @@ use crate::memory::lazy_map::{LazyDistanceFields, LazyPointsOfInterest}; // adju
 use crate::memory::{LocationID, ShortcutID};
 use crate::sdk_interact::map::step_with_fallback;
 use cambc::{Bitboard, Champion, ConsumableType, DistanceField, Vec2};
-use std::collections::HashMap;
 
 pub const DASH_RANGE: i32 = 2;
 pub const TP_RANGE: i32 = 3;
@@ -79,31 +78,74 @@ fn cheb(a: Vec2, b: Vec2) -> i32 {
     (a.x - b.x).abs().max((a.y - b.y).abs())
 }
 
+/// Local copy of a `Bitboard`: one host call to build, then `is_set` costs no host calls.
+/// Out-of-bounds reads as set, matching the old `is_set(..).unwrap_or(true)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TileGrid {
+    width: i32,
+    height: i32,
+    bits: Vec<u64>,
+}
+
+impl TileGrid {
+    pub fn from_bitboard(bitboard: &Bitboard) -> Self {
+        let width: i32 = cambc::map::width().unwrap() as i32; // add .unwrap() before the cast if this returns a Result
+        let height: i32 = cambc::map::height().unwrap() as i32;
+        let tile_count: usize = (width * height) as usize;
+        let mut bits: Vec<u64> = vec![0; tile_count.div_ceil(64)];
+        for position in bitboard.positions().unwrap() {
+            if position.x < 0 || position.y < 0 || position.x >= width || position.y >= height {
+                continue;
+            }
+            let index: usize = (position.y * width + position.x) as usize;
+            bits[index >> 6] |= 1u64 << (index & 63);
+        }
+        Self {
+            width,
+            height,
+            bits,
+        }
+    }
+
+    pub fn is_set(&self, position: Vec2) -> bool {
+        if position.x < 0 || position.y < 0 || position.x >= self.width || position.y >= self.height
+        {
+            return true;
+        }
+        let index: usize = (position.y * self.width + position.x) as usize;
+        self.bits[index >> 6] & (1u64 << (index & 63)) != 0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Geometry {
-    walls: Bitboard,
+    walls: TileGrid,
     /// Tiles you cannot land on: walls | holes | altars (your `blocked_bitboard`).
-    blocked: Bitboard,
+    blocked: TileGrid,
 }
 
 impl Geometry {
     pub fn new(walls: Bitboard, blocked: Bitboard) -> Self {
-        Self { walls, blocked }
+        Self {
+            walls: TileGrid::from_bitboard(&walls),
+            blocked: TileGrid::from_bitboard(&blocked),
+        }
     }
 
     pub fn from_blocked(blocked: &Bitboard) -> Self {
+        let walls: Bitboard = cambc::map::walls().unwrap().clone();
         Self {
-            walls: cambc::map::walls().unwrap().clone(),
-            blocked: blocked.clone(),
+            walls: TileGrid::from_bitboard(&walls),
+            blocked: TileGrid::from_bitboard(blocked),
         }
     }
 
     fn is_wall(&self, p: Vec2) -> bool {
-        self.walls.is_set(p).unwrap_or(true)
+        self.walls.is_set(p)
     }
 
     fn is_blocked(&self, p: Vec2) -> bool {
-        self.blocked.is_set(p).unwrap_or(true)
+        self.blocked.is_set(p)
     }
 
     /// Legal dash: <= 2 king steps, landing free, no wall on the middle tile (holes are fine).
@@ -155,15 +197,16 @@ pub struct ShortcutGraph {
 impl ShortcutGraph {
     pub fn new(poi: &LazyPointsOfInterest, geo: &Geometry) -> Self {
         let points: Vec<Vec2> = poi.shortcut_points.clone();
-        let index_of: HashMap<Vec2, usize> = points
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(i, p)| (p, i))
-            .collect();
         let partner: Vec<Option<usize>> = points
             .iter()
-            .map(|p| poi.shortcuts.get(p).and_then(|q| index_of.get(q).copied()))
+            .map(|point| {
+                let other: &Vec2 = poi.shortcuts.get(point)?;
+                points
+                    .binary_search_by_key(&(other.x, other.y), |candidate| {
+                        (candidate.x, candidate.y)
+                    })
+                    .ok()
+            })
             .collect();
         let gap: Vec<Gap> = points
             .iter()

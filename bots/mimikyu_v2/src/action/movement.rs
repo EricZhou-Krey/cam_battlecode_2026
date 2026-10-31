@@ -57,7 +57,6 @@ impl MovementActions for Action {
         if !routed {
             if !step_with_fallback(&state.distance_field, target_position) {
                 *self = Self::Idle;
-                self.turn(champion_memory);
                 return;
             }
             dash_forward(me, state, champion_memory, current_capabilities);
@@ -70,7 +69,6 @@ impl MovementActions for Action {
         if distance_to_goal <= state.accepted_distance {
             let Some(valid_next_action): Option<Self> = state.next_action.take() else {
                 *self = Self::Idle;
-                self.turn(champion_memory);
                 return;
             };
             *self = valid_next_action;
@@ -79,14 +77,29 @@ impl MovementActions for Action {
 
     fn escape_to_spawn(&mut self, champion_memory: &mut ChampionMemory) {
         let me: &Champion = cambc::self_champion().unwrap().unwrap();
-        let me_position: Vec2 = me.position().unwrap();
-        if me.is_recalling().unwrap() {
+        let Ok(me_position): Result<Vec2, _> = me.position() else {
+            *self = Self::Idle;
             return;
-        } else if cambc::map::spawn_region(Team::Ally)
-            .unwrap()
-            .is_set(me_position)
-            .unwrap()
-        {
+        };
+        if me.is_recalling().unwrap_or(false) {
+            return;
+        }
+
+        let in_spawn_region: bool = match cambc::map::spawn_region(Team::Ally) {
+            Ok(region) => match region.is_set(me_position) {
+                Ok(is_set) => is_set,
+                Err(error) => {
+                    println!(
+                        "escape_to_spawn: invalid position ({}, {}): {:?}",
+                        me_position.x, me_position.y, error
+                    );
+                    *self = Self::Idle;
+                    return;
+                }
+            },
+            Err(_) => false,
+        };
+        if in_spawn_region {
             *self = Self::Idle;
             return;
         }
@@ -106,7 +119,7 @@ impl MovementActions for Action {
             RECALL_TIME
         };
 
-        if spawn_distance_field.get(me_position).unwrap() <= recall_time {
+        if spawn_distance_field.get(me_position).unwrap_or(u16::MAX) <= recall_time {
             *self = Self::MoveToLocation(MovementState {
                 next_action: Box::new(None),
                 distance_field: spawn_distance_field.clone(),

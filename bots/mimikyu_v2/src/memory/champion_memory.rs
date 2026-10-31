@@ -22,11 +22,14 @@ pub struct ChampionMemory {
 impl ChampionMemory {
     pub fn from_draft_bytes(bytes: [u8; DRAFT_MEMORY_BYTE_SIZE]) -> Self {
         let draft_memory: DraftMemory = DraftMemory::from_bytes(&bytes);
+        let map: LazyMap = LazyMap::new(&draft_memory);
+        let champion_info: AllChampionInfo = AllChampionInfo::new();
+        let message_board: MessageBoard = MessageBoard::new();
 
         Self {
-            map: LazyMap::new(&draft_memory),
-            champion_info: AllChampionInfo::new(),
-            message_board: MessageBoard::new(),
+            map,
+            champion_info,
+            message_board,
 
             buy_index: 0,
         }

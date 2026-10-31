@@ -5,27 +5,27 @@ pub fn chebyshev_distance(first: Vec2, second: Vec2) -> u16 {
 }
 
 pub fn step_with_fallback(field: &DistanceField, goal: Vec2) -> bool {
-    let me: &Champion = cambc::self_champion().unwrap().unwrap();
-    let pos = me.position().unwrap();
-
-    for dir in field.next_moves_from(pos).unwrap() {
-        if !me.can_move().unwrap() {
-            return false;
-        }
-        match me.r#move(dir) {
-            Ok(true) => return true,
-            Ok(false) => continue,
-            Err(_e) => continue,
-        }
+    let Ok(Some(me)): Result<Option<&Champion>, _> = cambc::self_champion() else {
+        return false;
+    };
+    let Ok(position): Result<Vec2, _> = me.position() else {
+        return false;
+    };
+    if !me.can_move().unwrap_or(false) {
+        return false;
     }
 
-    if me.can_move().unwrap() {
-        if let Ok(true) = me.move_towards(goal) {
+    let directions: Vec<Vec2> = field.next_moves_from(position).unwrap_or_default();
+    for direction in directions {
+        if !me.can_move().unwrap_or(false) {
+            return false;
+        }
+        if let Ok(true) = me.r#move(direction) {
             return true;
         }
     }
 
-    false
+    matches!(me.move_towards(goal), Ok(true))
 }
 
 pub trait Center {

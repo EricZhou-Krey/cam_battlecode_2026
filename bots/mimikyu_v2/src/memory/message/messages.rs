@@ -144,7 +144,7 @@ impl MessageType {
                 Self::CombatLosingFightNeedHelp | Self::CombatWinningFightWantHelp => {
                     ID_BITS + SIGNAL_STRENGTH_BITS + CHAMPION_BITS
                 }
-                Self::CombatTargetEnemy => CHAMPION_BITS,
+                Self::CombatTargetEnemy => ID_BITS + SIGNAL_STRENGTH_BITS,
                 Self::StatusAllyHealth | Self::StatusEnemyHealth => CHAMPION_BITS + HEALTH_BITS,
                 Self::StatusAllyLocation | Self::StatusEnemyLocation => CHAMPION_BITS + ID_BITS,
                 Self::StatusAllyGemsHeld | Self::StatusEnemyGemsHeld => CHAMPION_BITS + GEMS_BITS,
