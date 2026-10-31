@@ -270,7 +270,7 @@ impl LazyPointsOfInterest {
             let mut consider = |id: LocationID| {
                 let distance: u16 = distance_fields
                     .try_get(id, self)
-                    .map(|field| field.get(location).unwrap())
+                    .map(|field| field.get(location).unwrap_or(u16::MAX))
                     .unwrap_or(0);
 
                 if closest.is_none_or(|(best_distance, _)| distance < best_distance) {

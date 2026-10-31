@@ -15,7 +15,7 @@ use crate::{
     },
     sdk_interact::map::chebyshev_distance,
 };
-use cambc::{Champion, ChampionType, DistanceField, Vec2};
+use cambc::{self_champion, Champion, ChampionType, DistanceField, Vec2};
 
 pub mod combat;
 pub mod farm;
@@ -24,7 +24,7 @@ pub mod route;
 pub mod shop;
 
 pub const COMBAT_HEAL_SIGNAL_STRENGTH: u16 = 15;
-pub const DANGER_HP_THRESHOLD: f32 = 0.2;
+pub const DANGER_HP_THRESHOLD: f32 = 0.3;
 pub const WARNING_HP_THRESHOLD: f32 = 0.5;
 
 #[repr(usize)]
@@ -142,6 +142,14 @@ impl Action {
 
     pub fn turn(&mut self, champion_memory: &mut ChampionMemory) {
         self.buy_action(champion_memory);
+        let me = self_champion().unwrap().unwrap();
+        if !me.is_alive().unwrap() {
+            *self = Self::Idle;
+            return;
+        }
+        if me.buffs().unwrap().has_stun() {
+            return;
+        }
         self.try_prempt_current_action(champion_memory);
 
         match self {
@@ -161,45 +169,65 @@ impl Action {
     fn farm_reaction(champion_memory: &mut ChampionMemory) -> Option<Self> {
         let me: &Champion = cambc::self_champion().unwrap().unwrap();
         let me_position: Vec2 = me.position().unwrap();
-        let alive_camp_group_ids: Vec<CampGroupID> = (0..champion_memory
+        let mut ready_camp_group: Option<(u16, CampGroupID)> = None;
+        let mut soonest_camp_group: Option<(i32, CampGroupID)> = None;
+
+        for index in 0..champion_memory
             .map
             .points_of_interest
             .camp_group_centers
-            .len())
-            .filter_map(|index| {
-                let camp_group_id: CampGroupID = CampGroupID(index);
-                let distance_field: Option<&DistanceField> =
-                    champion_memory.map.distance_fields.try_get(
-                        LocationID::CampGroup(camp_group_id),
-                        &champion_memory.map.points_of_interest,
-                    );
+            .len()
+        {
+            let camp_group_id: CampGroupID = CampGroupID(index);
+            let Some(time_to_respawn): Option<i32> = champion_memory
+                .map
+                .camp_group_respawn_timer
+                .get(index)
+                .copied()
+            else {
+                continue;
+            };
 
-                let time_to_respawn: i32 =
-                    *champion_memory.map.camp_group_respawn_timer.get(index)?;
-
-                if distance_field.map_or(-1_i32, |field| field.get(me_position).unwrap() as i32)
-                    > time_to_respawn
-                {
-                    Some(CampGroupID(index))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let target_camp_group: Option<CampGroupID> = alive_camp_group_ids
-            .iter()
-            .min_by_key(|camp_group_id| {
-                chebyshev_distance(
-                    me_position,
-                    champion_memory.map.points_of_interest.camp_group_centers[camp_group_id.0],
+            let Some(distance_field): Option<&DistanceField> =
+                champion_memory.map.distance_fields.try_get(
+                    LocationID::CampGroup(camp_group_id),
+                    &champion_memory.map.points_of_interest,
                 )
-            })
-            .copied();
+            else {
+                continue;
+            };
 
-        let camp_group = target_camp_group?;
+            let distance: u16 = distance_field.get(me_position).unwrap_or(u16::MAX);
+            if distance == u16::MAX {
+                continue;
+            }
+
+            if distance >= time_to_respawn as u16 {
+                let straight_distance: u16 = chebyshev_distance(
+                    me_position,
+                    champion_memory.map.points_of_interest.camp_group_centers[index],
+                );
+                if ready_camp_group.map_or_else(
+                    || true,
+                    |(best_distance, _)| straight_distance < best_distance,
+                ) {
+                    ready_camp_group = Some((straight_distance, camp_group_id));
+                }
+            } else {
+                let wait_rounds: i32 = time_to_respawn - distance as i32;
+                if soonest_camp_group.map_or_else(|| true, |(best_wait, _)| wait_rounds < best_wait)
+                {
+                    soonest_camp_group = Some((wait_rounds, camp_group_id));
+                }
+            }
+        }
+
+        let camp_group: CampGroupID = ready_camp_group
+            .map(|(_, camp_group_id)| camp_group_id)
+            .or(soonest_camp_group.map(|(_, camp_group_id)| camp_group_id))?;
+
         let location_id: LocationID = LocationID::CampGroup(camp_group);
-        let distance_field = champion_memory
+        let distance_field: DistanceField = champion_memory
             .map
             .distance_fields
             .try_get(location_id, &champion_memory.map.points_of_interest)
@@ -458,7 +486,7 @@ impl Action {
                         continue;
                     };
                     let distance: u16 = distance_field.get(me_position).unwrap();
-                    if *signal_strength < distance {
+                    if *signal_strength < distance || distance <= MOVE_PROXIMITY {
                         continue;
                     }
 
@@ -494,7 +522,7 @@ impl Action {
                         continue;
                     };
                     let distance: u16 = distance_field.get(me_position).unwrap();
-                    if *signal_strength < distance {
+                    if *signal_strength < distance || distance <= MOVE_PROXIMITY {
                         continue;
                     }
 
@@ -530,7 +558,7 @@ impl Action {
                         continue;
                     };
                     let distance: u16 = distance_field.get(me_position).unwrap();
-                    if *signal_strength < distance {
+                    if *signal_strength < distance || distance <= MOVE_PROXIMITY {
                         continue;
                     }
 
@@ -565,7 +593,7 @@ impl Action {
                         continue;
                     };
                     let distance: u16 = distance_field.get(me_position).unwrap();
-                    if *signal_strength < distance {
+                    if *signal_strength < distance || distance <= MOVE_PROXIMITY {
                         continue;
                     }
 
@@ -596,6 +624,10 @@ impl Action {
                     else {
                         continue;
                     };
+                    let distance: u16 = distance_field.get(me_position).unwrap_or(u16::MAX);
+                    if distance <= MOVE_PROXIMITY {
+                        continue;
+                    }
 
                     max_precedence = ActionGroupType::Support as i32;
                     reaction = Some((

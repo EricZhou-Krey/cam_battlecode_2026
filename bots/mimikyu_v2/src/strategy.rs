@@ -2,7 +2,6 @@ use crate::{
     action::Action,
     draft::draft_memory::{DraftMemory, DraftMemoryBlock},
     memory::champion_memory::ChampionMemory,
-    sdk_interact::debug::{debug_current_action, debug_draft_init},
 };
 use cambc::ChampionDraft;
 
@@ -26,7 +25,7 @@ impl Strategy {
             Self::Draft => {
                 let draft_memory: DraftMemory = DraftMemory::new();
                 let _ = cambc::draft_memory().submit(&draft_memory.as_bytes());
-                debug_draft_init(&draft_memory);
+                crate::sdk_interact::debug::debug_draft_init(&draft_memory);
 
                 loop {
                     let pick: ChampionDraft = draft_memory.pick();
@@ -44,14 +43,15 @@ impl Strategy {
                     champion_memory.map.distance_fields.reset_discovered_state();
                     champion_memory.map.tick_camp_group_respawn_timers();
                     champion_memory.message_board.sync();
+                    champion_memory.update_by_visible_champions();
                     champion_memory.update_by_status_messgges();
-
-                    current_action.turn(&mut champion_memory);
-
                     champion_memory
                         .map
                         .distance_fields
                         .lazy_discover(&champion_memory.map.points_of_interest);
+
+                    current_action.turn(&mut champion_memory);
+
                     champion_memory.message_board.flush();
 
                     // crate::sdk_interact::debug::debug_champion_turn(&champion_memory);

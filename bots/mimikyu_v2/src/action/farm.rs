@@ -10,7 +10,9 @@ use crate::{
             should_wait_for_front_line, status_due, tile_distance, try_cast_heal, visible_allies,
             HELP_SIGNAL_STRENGTH,
         },
-        movement::{MoveToSpawnState, MovementState, RECALL_TIME, RECALL_TIME_HOME},
+        movement::{
+            MoveToSpawnState, MovementActions, MovementState, RECALL_TIME, RECALL_TIME_HOME,
+        },
         Action, ActionGroupType, WARNING_HP_THRESHOLD,
     },
     memory::{
@@ -25,6 +27,7 @@ pub const COLLECTION_TIME: u16 = 5;
 const DISENGAGE_ROUNDS: f32 = 3.0;
 const CAMP_THREAT_MARGIN: i32 = 1;
 const CAMP_SUPPORT_RADIUS: i32 = 4;
+const BLOCKED_RESPAWN_BACKOFF: i32 = 6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampGroupCombatState {
@@ -55,6 +58,12 @@ pub trait FarmActions {
 }
 
 impl Action {
+    fn retarget(&mut self, champion_memory: &mut ChampionMemory) {
+        *self = Self::farm_reaction(champion_memory).unwrap_or(Self::Idle);
+        if matches!(self, Self::MoveToLocation(_)) {
+            self.move_to_location(champion_memory);
+        }
+    }
     fn begin_collection(
         &mut self,
         champion_memory: &mut ChampionMemory,
@@ -106,13 +115,18 @@ impl Action {
         let ally_capturing: bool = capture_state
             .is_some_and(|capture| capture.state == CampGroupCaptureType::AllyCapturing);
         if already_claimed || ally_capturing {
-            *self = Self::Idle;
+            champion_memory
+                .map
+                .start_camp_group_respawn_timer(camp_group_id);
+            champion_memory.map.camp_group_respawn_timer[camp_group_id.0] += COLLECTION_TIME as i32;
+            self.retarget(champion_memory);
             return;
         }
 
         champion_memory
             .map
             .start_camp_group_respawn_timer(camp_group_id);
+        champion_memory.map.camp_group_respawn_timer[camp_group_id.0] += COLLECTION_TIME as i32;
         champion_memory
             .message_board
             .send(Message::FarmClear { camp_group_id });
@@ -153,8 +167,12 @@ impl FarmActions for Action {
 
         match camp_group.state() {
             Ok(CampGroupState::Respawning(remaining)) => {
-                champion_memory.map.camp_group_respawn_timer[camp_group_id.0] = remaining;
-                *self = Self::Idle;
+                champion_memory.map.camp_group_respawn_timer[camp_group_id.0] = if remaining > 0 {
+                    remaining
+                } else {
+                    BLOCKED_RESPAWN_BACKOFF
+                };
+                self.retarget(champion_memory);
                 return;
             }
             Ok(CampGroupState::RewardAvailable) => {
@@ -274,6 +292,7 @@ impl FarmActions for Action {
             CampGroupCaptureType::Contested | CampGroupCaptureType::EnemyCapturing
         );
         if group_finished || capture_lost {
+            crate::sdk_interact::debug::post_fuel("attempting to leave collection");
             *self = Self::Idle;
             return;
         }

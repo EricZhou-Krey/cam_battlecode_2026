@@ -1,19 +1,72 @@
 use crate::{
     action::{
+        combat::kit::{tile_distance, try_dash, try_step_away, visible_enemies, DASH_MINIMUM_GAIN},
         route::{capabilities, dash_forward, follow_route, Capabilities, Route},
         Action, ActionGroupType,
     },
     memory::{champion_memory::ChampionMemory, CampGroupID, LocationID},
     sdk_interact::{champion::passive_active, map::step_with_fallback},
 };
-use cambc::{Champion, DistanceField, ItemPassive, Team, Vec2};
+use cambc::{Bitboard, Champion, DistanceField, ItemPassive, Team, Vec2};
 
 pub const MOVE_PROXIMITY: u16 = 3;
 pub const RECALL_TIME: u16 = 5;
 pub const RECALL_TIME_HOME: u16 = 3;
-
 pub const MAX_ROUTE_FAILURES: u8 = 2;
+pub const ESCAPE_THREAT_RANGE: i32 = 6;
+pub const CAMP_ESCAPE_MARGIN: i32 = 2;
 
+fn threat_sources() -> Vec<(Vec2, i32)> {
+    let mut threats: Vec<(Vec2, i32)> = Vec::new();
+
+    for enemy in visible_enemies() {
+        if let Ok(position) = enemy.position() {
+            threats.push((position, ESCAPE_THREAT_RANGE));
+        }
+    }
+
+    if let Ok(camp_groups) = cambc::map::camp_groups() {
+        for camp_group in camp_groups.iter() {
+            for camp in camp_group.camps() {
+                if camp.is_dead().unwrap_or(true) || !camp.is_awake().unwrap_or(false) {
+                    continue;
+                }
+                let Ok(stats) = camp.base_stats() else {
+                    continue;
+                };
+                threats.push((
+                    camp.spawn_position(),
+                    stats.base_attack_range + CAMP_ESCAPE_MARGIN,
+                ));
+            }
+        }
+    }
+    threats
+}
+
+fn clearance(tile: Vec2, threats: &[(Vec2, i32)]) -> i32 {
+    threats
+        .iter()
+        .map(|(position, reach)| tile_distance(tile, *position) - reach)
+        .min()
+        .unwrap_or(i32::MAX)
+}
+
+fn disengage(me: &Champion, blocked: &Bitboard, threats: &[(Vec2, i32)]) {
+    let Ok(position): Result<Vec2, _> = me.position() else {
+        return;
+    };
+    let score = |tile: Vec2| -clearance(tile, threats);
+    let _ = try_dash(me, blocked, score(position), DASH_MINIMUM_GAIN, score);
+
+    let position_after_dash: Vec2 = me.position().unwrap_or(position);
+    if let Some((nearest, _)) = threats
+        .iter()
+        .min_by_key(|(threat, reach)| tile_distance(position_after_dash, *threat) - reach)
+    {
+        let _ = try_step_away(me, *nearest);
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct MovementState {
     pub next_action: Box<Option<Action>>,
@@ -81,7 +134,10 @@ impl MovementActions for Action {
             *self = Self::Idle;
             return;
         };
-        if me.is_recalling().unwrap_or(false) {
+
+        let threats: Vec<(Vec2, i32)> = threat_sources();
+        let threatened: bool = clearance(me_position, &threats) <= 0;
+        if me.is_recalling().unwrap_or(false) && !threatened {
             return;
         }
 
@@ -103,13 +159,23 @@ impl MovementActions for Action {
             *self = Self::Idle;
             return;
         }
-
-        let Some(spawn_distance_field): Option<&DistanceField> = champion_memory
+        if threatened {
+            disengage(
+                me,
+                &champion_memory.map.distance_fields.blocked_bitboard,
+                &threats,
+            );
+            return;
+        }
+        let Some(spawn_distance_field): Option<DistanceField> = champion_memory
             .map
             .distance_fields
             .try_get_spawn_distance_field()
+            .cloned()
         else {
-            let _ = me.recall();
+            if !threatened {
+                let _ = me.recall();
+            }
             return;
         };
 
@@ -122,7 +188,7 @@ impl MovementActions for Action {
         if spawn_distance_field.get(me_position).unwrap_or(u16::MAX) <= recall_time {
             *self = Self::MoveToLocation(MovementState {
                 next_action: Box::new(None),
-                distance_field: spawn_distance_field.clone(),
+                distance_field: spawn_distance_field,
                 location_id: LocationID::CampGroup(CampGroupID(0)),
                 accepted_distance: 0,
                 action_group_type: ActionGroupType::Survival,
